@@ -1,0 +1,22 @@
+# Maven
+target/
+*.class
+*.jar
+*.war
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Fișiere uploadate (nu le punem în git)
+uploads/
+
+# Configurări locale sensibile
+src/main/resources/application-dev.properties
+src/main/resources/application-prod.properties
+
+# OS
+.DS_Store
+Thumbs.db
