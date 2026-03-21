@@ -110,13 +110,16 @@ public class FileStorageService {
             Path destination = boardDir.resolve(uniqueFileName);
             Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
 
-            log.info("FILE_STORED path={} size={} type={}", relativePath, file.getSize(), contentType);
+            log.info("FILE_STORED path={} size={} type={}",
+                    relativePath,
+                    file.getSize(),
+                    sanitizeForLog(contentType));
 
             return relativePath;
 
         } catch (IOException e) {
             log.error("FILE_STORE_FAILED originalName={} error=\"{}\"",
-                    file.getOriginalFilename(), e.getMessage());
+                    sanitizeForLog(file.getOriginalFilename()), e.getMessage());
             throw new BusinessException(ErrorCode.BUSINESS_RULE_VIOLATION,
                     "Nu am putut salva fișierul. Încearcă din nou.");
         }
@@ -155,5 +158,15 @@ public class FileStorageService {
         String contentType = file.getContentType();
         if (contentType == null) return "PDF";
         return contentType.startsWith("image/") ? "IMAGE" : "PDF";
+    }
+
+    /**
+     * Sanitizează un string pentru logare — elimină newline-uri și caractere
+     * de control care ar putea permite log injection.
+     * Înlocuiește \n, \r, \t cu spații.
+     */
+    private String sanitizeForLog(String input) {
+        if (input == null) return "null";
+        return input.replaceAll("[\n\r\t]", " ");
     }
 }

@@ -1,6 +1,7 @@
 package com.springapp.proiectcrm.exception;
 
 import com.springapp.proiectcrm.dto.ApiErrorResponse;
+import com.springapp.proiectcrm.logging.LogSanitizer;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -76,7 +77,9 @@ public class GlobalExceptionHandler {
         // WARN: eroare de business așteptată — nu critică, dar relevantă pentru audit
         // Includem codul de eroare și mesajul pentru a înțelege contextul fără să deschidem BD
         log.warn("BUSINESS_EXCEPTION code={} status={} message=\"{}\" path={}",
-                code.name(), status.value(), ex.getMessage(), request.getRequestURI());
+                code.name(), status.value(),
+                LogSanitizer.sanitize(ex.getMessage()),
+                LogSanitizer.sanitize(request.getRequestURI()));
 
         ApiErrorResponse body = ApiErrorResponse.of(
                 status.value(),
@@ -107,9 +110,9 @@ public class GlobalExceptionHandler {
 
         // WARN: client a trimis date invalide — comportament așteptat, nu bug
         log.warn("VALIDATION_FAILED path={} field={} message=\"{}\"",
-                request.getRequestURI(),
+                LogSanitizer.sanitize(request.getRequestURI()),
                 firstFieldError != null ? firstFieldError.getField() : "unknown",
-                message);
+                LogSanitizer.sanitize(message));
 
         ApiErrorResponse body = ApiErrorResponse.of(
                 status.value(), status.getReasonPhrase(), message,
@@ -129,7 +132,8 @@ public class GlobalExceptionHandler {
     ) {
         // WARN: argument invalid — de obicei ID inexistent trimis de client
         log.warn("ILLEGAL_ARGUMENT path={} message=\"{}\"",
-                request.getRequestURI(), ex.getMessage());
+                LogSanitizer.sanitize(request.getRequestURI()),
+                LogSanitizer.sanitize(ex.getMessage()));
 
         HttpStatus status = HttpStatus.BAD_REQUEST;
         ApiErrorResponse body = ApiErrorResponse.of(
@@ -150,7 +154,9 @@ public class GlobalExceptionHandler {
     ) {
         String message = "Lipsește parametrul obligatoriu '" + ex.getParameterName() + "'.";
 
-        log.warn("MISSING_PARAM path={} param={}", request.getRequestURI(), ex.getParameterName());
+        log.warn("MISSING_PARAM path={} param={}",
+                LogSanitizer.sanitize(request.getRequestURI()),
+                LogSanitizer.sanitize(ex.getParameterName()));
 
         HttpStatus status = HttpStatus.BAD_REQUEST;
         ApiErrorResponse body = ApiErrorResponse.of(
@@ -214,9 +220,9 @@ public class GlobalExceptionHandler {
         // Apare în error.log (filtrat WARN+) și app.log
         // ex.getMessage() poate fi null pentru unele excepții (ex: NullPointerException)
         log.error("UNHANDLED_EXCEPTION path={} exceptionClass={} message=\"{}\"",
-                request.getRequestURI(),
+                LogSanitizer.sanitize(request.getRequestURI()),
                 ex.getClass().getSimpleName(),
-                ex.getMessage(),
+                LogSanitizer.sanitize(ex.getMessage()),
                 ex);  // ultimul argument `ex` face Logback să includă stack trace-ul complet
 
         HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
@@ -238,8 +244,8 @@ public class GlobalExceptionHandler {
 
         // WARN în loc de ERROR — e o eroare de client (method greșit), nu bug de server
         log.warn("METHOD_NOT_SUPPORTED method={} path={} supported={}",
-                ex.getMethod(),
-                request.getRequestURI(),
+                LogSanitizer.sanitize(ex.getMethod()),
+                LogSanitizer.sanitize(request.getRequestURI()),
                 ex.getSupportedHttpMethods());
 
         return ResponseEntity
@@ -256,7 +262,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(org.springframework.security.authentication.BadCredentialsException.class)
     public ResponseEntity<ApiErrorResponse> handleBadCredentials(
             BadCredentialsException ex, HttpServletRequest request) {
-        log.warn("BAD_CREDENTIALS path={}", request.getRequestURI());
+        log.warn("BAD_CREDENTIALS path={}", LogSanitizer.sanitize(request.getRequestURI()));
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(ApiErrorResponse.of(401, "Unauthorized",
                         "Email sau parolă incorecte.", request.getRequestURI(), "BAD_CREDENTIALS"));
@@ -271,7 +277,8 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
         log.error("MESSAGE_NOT_WRITABLE path={} error=\"{}\"",
-                request.getRequestURI(), ex.getMessage());
+                LogSanitizer.sanitize(request.getRequestURI()),
+                LogSanitizer.sanitize(ex.getMessage()));
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
     }
 }

@@ -6,6 +6,7 @@ import com.springapp.proiectcrm.dto.EnrollmentRequest;
 import com.springapp.proiectcrm.dto.EnrollmentResponse;
 import com.springapp.proiectcrm.exception.BusinessException;
 import com.springapp.proiectcrm.exception.ErrorCode;
+import com.springapp.proiectcrm.logging.LogSanitizer;
 import com.springapp.proiectcrm.logging.MdcFilter;
 import com.springapp.proiectcrm.model.Child;
 import com.springapp.proiectcrm.model.ChildGroup;
@@ -78,7 +79,7 @@ public class EnrollmentServiceImpl implements EnrollmentService {
         // Acest log apare ÎNAINTEA oricărei validări — util dacă înscrierea eșuează
         // și vrem să vedem că a fost inițiată
         log.info("ENROLL_START email={} children={}",
-                MdcFilter.maskEmail(request.getParentEmail()),
+                LogSanitizer.sanitize(MdcFilter.maskEmail(request.getParentEmail())),
                 request.getChildren() != null ? request.getChildren().size() : 0);
 
         try {
@@ -118,7 +119,7 @@ public class EnrollmentServiceImpl implements EnrollmentService {
 
             // INFO la succes — parentId util pentru căutare ulterioară în BD
             log.info("ENROLL_SUCCESS email={} parentId={} childrenCount={} groups={}",
-                    MdcFilter.maskEmail(request.getParentEmail()),
+                    LogSanitizer.sanitize(MdcFilter.maskEmail(request.getParentEmail())),
                     parent.getIdUser(),
                     items.size(),
                     items.stream().map(i -> String.valueOf(i.getGroupId())).toList());
@@ -130,9 +131,9 @@ public class EnrollmentServiceImpl implements EnrollmentService {
             // Nu re-aruncăm — GlobalExceptionHandler va prinde BusinessException și va loga din nou
             // Dar loghăm ENROLL_BLOCKED explicit ca eveniment de audit
             log.warn("ENROLL_BLOCKED email={} reason={} message=\"{}\"",
-                    MdcFilter.maskEmail(request.getParentEmail()),
+                    LogSanitizer.sanitize(MdcFilter.maskEmail(request.getParentEmail())),
                     e.getErrorCode().name(),
-                    e.getMessage());
+                    LogSanitizer.sanitize(e.getMessage()));
             throw e;  // re-aruncăm pentru a fi gestionată de GlobalExceptionHandler
         }
     }

@@ -3,6 +3,7 @@ package com.springapp.proiectcrm.service;
 import com.springapp.proiectcrm.dto.*;
 import com.springapp.proiectcrm.exception.BusinessException;
 import com.springapp.proiectcrm.exception.ErrorCode;
+import com.springapp.proiectcrm.logging.LogSanitizer;
 import com.springapp.proiectcrm.logging.MdcFilter;
 import com.springapp.proiectcrm.model.Child;
 import com.springapp.proiectcrm.model.ChildGroup;
@@ -147,7 +148,9 @@ public class AdminParentServiceImpl implements AdminParentService {
         Child saved = childRepository.save(child);
 
         log.info("ADD_CHILD_OK parentId={} childId={} childName=\"{} {}\"",
-                parentId, saved.getIdChild(), saved.getChildFirstName(), saved.getChildLastName());
+                parentId, saved.getIdChild(),
+                LogSanitizer.sanitize(saved.getChildFirstName()),
+                LogSanitizer.sanitize(saved.getChildLastName()));
 
         return new AdminChildRowResponse(
                 saved.getIdChild(), saved.getChildFirstName(), saved.getChildLastName(),
@@ -196,8 +199,8 @@ public class AdminParentServiceImpl implements AdminParentService {
         // GDPR: ambele emailuri mascate — confirmăm că schimbarea a avut loc fără a expune date
         log.info("CHANGE_EMAIL_OK parentId={} oldEmail={} newEmail={}",
                 parentId,
-                MdcFilter.maskEmail(oldEmail),
-                MdcFilter.maskEmail(newEmail));
+                LogSanitizer.sanitize(MdcFilter.maskEmail(oldEmail)),
+                LogSanitizer.sanitize(MdcFilter.maskEmail(newEmail)));
 
         String fullName = saved.getFirstName() + " " + saved.getLastName();
         sendEmailChangedAsync(oldEmail, newEmail, fullName);

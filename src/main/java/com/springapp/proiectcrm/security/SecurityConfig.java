@@ -10,6 +10,8 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -53,7 +55,17 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    SecurityContextRepository securityContextRepository) throws Exception {
         http
-                .csrf(AbstractHttpConfigurer::disable)
+                // ── CSRF: activat cu CookieCsrfTokenRepository ────────────────────────
+                // Backend trimite cookie XSRF-TOKEN (HttpOnly=false) → frontend îl citește
+                // și îl trimite în header-ul X-XSRF-TOKEN la fiecare request non-GET.
+                // Ignorăm CSRF pentru:
+                //   /api/auth/**  → login/logout nu necesită token (sesiunea nu există încă)
+                //   /ws/**        → SockJS gestionează propria autentificare prin JSESSIONID
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        .ignoringRequestMatchers("/api/auth/**", "/ws/**")
+                )
                 .cors(Customizer.withDefaults())
                 .securityContext(sc -> sc.securityContextRepository(securityContextRepository))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))

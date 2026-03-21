@@ -3,6 +3,7 @@ package com.springapp.proiectcrm.service;
 import com.springapp.proiectcrm.dto.*;
 import com.springapp.proiectcrm.exception.BusinessException;
 import com.springapp.proiectcrm.exception.ErrorCode;
+import com.springapp.proiectcrm.logging.LogSanitizer;
 import com.springapp.proiectcrm.model.*;
 import com.springapp.proiectcrm.repository.*;
 import lombok.RequiredArgsConstructor;
@@ -110,11 +111,11 @@ public class WaitlistServiceImpl implements WaitlistService {
         // GDPR: emailul mascat în log
         log.info("WAITLIST_ADD entryId={} email={} child=\"{} {}\" course=\"{}\" school=\"{}\"",
                 saved.getId(),
-                maskEmail(email),
-                saved.getChildFirstName(),
-                saved.getChildLastName(),
-                saved.getPreferredCourseName(),
-                saved.getPreferredSchoolName());
+                LogSanitizer.sanitize(maskEmail(email)),
+                LogSanitizer.sanitize(saved.getChildFirstName()),
+                LogSanitizer.sanitize(saved.getChildLastName()),
+                LogSanitizer.sanitize(saved.getPreferredCourseName()),
+                LogSanitizer.sanitize(saved.getPreferredSchoolName()));
 
         return toResponse(saved);
     }

@@ -90,22 +90,18 @@ public class MdcFilter extends OncePerRequestFilter {
      *
      * Logica: primele 3 caractere din local + "***" @ "***" + TLD
      */
-     public static String maskEmail(String email) {
-        if (email == null) return "***";
-        int atIdx = email.indexOf('@');
-        if (atIdx < 0)  return "***";  // format invalid, nu loghăm nimic recognoscibil
+    public static String maskEmail(String email) {
+        if (email == null) return "null";
 
-        String local  = email.substring(0, atIdx);
-        String domain = email.substring(atIdx + 1);
+        // SECURITATE: eliminăm newline-uri înainte de orice procesare
+        // Previne log injection indiferent de unde e apelată metoda
+        String sanitized = email.replaceAll("[\n\r\t]", " ");
 
-        // Local: primele min(3, length) caractere + "***"
-        String maskedLocal = local.substring(0, Math.min(3, local.length())) + "***";
-
-        // Domeniu: "***" + TLD (ultimul segment după ultimul punct)
-        int lastDot       = domain.lastIndexOf('.');
-        String tld        = (lastDot >= 0) ? domain.substring(lastDot) : domain;
-        String maskedDomain = "***" + tld;
-
-        return maskedLocal + "@" + maskedDomain;
+        int atIdx = sanitized.indexOf('@');
+        if (atIdx <= 0) return "***";
+        String local = sanitized.substring(0, atIdx);
+        String domain = sanitized.substring(atIdx);
+        if (local.length() <= 3) return local.charAt(0) + "***" + domain;
+        return local.substring(0, 3) + "***" + domain;
     }
 }

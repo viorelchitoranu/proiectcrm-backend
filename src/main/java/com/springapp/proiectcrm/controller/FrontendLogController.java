@@ -1,6 +1,7 @@
 package com.springapp.proiectcrm.controller;
 
 import com.springapp.proiectcrm.dto.FrontendLogRequest;
+import com.springapp.proiectcrm.logging.LogSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -57,6 +58,12 @@ public class FrontendLogController {
             stack = stack.substring(0, 1000) + "... [trunchiat]";
         }
 
+        // Sanitizare log injection — toate câmpurile vin de la browser (user input)
+        String safeSection = LogSanitizer.sanitize(req.getSection());
+        String safeUrl     = LogSanitizer.sanitize(req.getUrl());
+        String safeMsg     = LogSanitizer.sanitize(req.getMessage());
+        String safeStack   = LogSanitizer.sanitize(stack);
+
         // Formăm mesajul structurat — prefix [FE] pentru identificare rapidă în grep
         String logMessage = "[FE] section={} url={} msg={} stack={}";
 
@@ -64,9 +71,9 @@ public class FrontendLogController {
         String level = (req.getLevel() != null) ? req.getLevel().toUpperCase() : "INFO";
 
         switch (level) {
-            case "ERROR" -> log.error(logMessage, req.getSection(), req.getUrl(), req.getMessage(), stack);
-            case "WARN"  -> log.warn (logMessage, req.getSection(), req.getUrl(), req.getMessage(), stack);
-            default      -> log.info (logMessage, req.getSection(), req.getUrl(), req.getMessage(), stack);
+            case "ERROR" -> log.error(logMessage, safeSection, safeUrl, safeMsg, safeStack);
+            case "WARN"  -> log.warn (logMessage, safeSection, safeUrl, safeMsg, safeStack);
+            default      -> log.info (logMessage, safeSection, safeUrl, safeMsg, safeStack);
         }
 
         // Returnăm 200 OK fără body — frontend nu are nevoie de confirmare
