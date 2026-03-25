@@ -35,7 +35,7 @@ import java.util.List;
  *   /topic/board/{channel}/comments   → comentarii noi
  *   /topic/board/{channel}/reactions  → reacții actualizate
  */
-@Controller
+@RestController
 @RequiredArgsConstructor
 public class MessageBoardController {
 
