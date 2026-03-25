@@ -495,6 +495,24 @@ public class ParentServiceImpl implements ParentService {
      * @param attendanceBySessionId map preîncărcat attendance per sesiune (anti N+1)
      * @param now                  timestamp curent (calculat o dată pentru toată lista)
      */
+    /**
+     * Construiește un SessionSummaryResponse pentru o sesiune, calculând:
+     *   - schoolName / schoolAddress: din sesiune, cu fallback pe grupă
+     *   - baseCondition: sesiune PLANNED și cel puțin 24h în viitor
+     *   - flag-uri de acțiune: cancellable, recoveryRequestAllowed
+     *   - date prezență: status, assignedToSessionId, isRecovery
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 21 (limita e 15).
+     *   Logica a fost extrasă în 2 metode private:
+     *     computeSessionDateTime() → calculează datetime-ul sesiunii pentru verificarea 24h
+     *     computeActionFlags()     → calculează flag-urile cancellable + recoveryRequestAllowed
+     *
+     * @param s                    sesiunea de mapat
+     * @param group                grupa (pentru fallback school)
+     * @param attendanceBySessionId map preîncărcat attendance per sesiune (anti N+1)
+     * @param now                  timestamp curent (calculat o dată pentru toată lista)
+     */
     private SessionSummaryResponse toSessionSummary(
             Session s,
             GroupClass group,
@@ -507,43 +525,21 @@ public class ParentServiceImpl implements ParentService {
         String schoolAddress = s.getSchool() != null ? s.getSchool().getAddress()
                 : (group.getSchool() != null ? group.getSchool().getAddress() : null);
 
-        // Datetime-ul sesiunii pentru verificarea pragului de 24h
-        LocalDateTime sessionDateTime = null;
-        if (s.getSessionDate() != null) {
-            LocalTime startTime = (s.getTime() != null) ? s.getTime() : LocalTime.MIDNIGHT;
-            sessionDateTime = LocalDateTime.of(s.getSessionDate(), startTime);
-        }
-
+        // Condiția de bază: sesiune PLANNED și cel puțin 24h distanță
+        LocalDateTime sessionDateTime = computeSessionDateTime(s);
         boolean isPlanned        = s.getSessionStatus() == SessionStatus.PLANNED;
         boolean atLeast24hBefore = sessionDateTime != null
                 && !sessionDateTime.isBefore(now.plusHours(24));
-
-        // Condiția de bază: sesiune PLANNED și cel puțin 24h distanță
-        boolean baseCondition = isPlanned && atLeast24hBefore;
+        boolean baseCondition    = isPlanned && atLeast24hBefore;
 
         Attendance a = attendanceBySessionId.get(s.getIdSession());
 
-        // PROCESATĂ: profesorul a confirmat deja O cerere (EXCUSED sau RECOVERY_BOOKED)
-        // → AMBELE butoane se dezactivează
-        boolean alreadyProcessed = a != null
-                && (a.getStatus() == AttendanceStatus.EXCUSED
-                ||  a.getStatus() == AttendanceStatus.RECOVERY_BOOKED);
+        // Flag-urile finale pentru butoanele UI
+        boolean[] flags = computeActionFlags(a, baseCondition);
+        boolean cancellable            = flags[0];
+        boolean recoveryRequestAllowed = flags[1];
 
-        // CANCEL PENDING: cerere de anulare în așteptare → butonul "Anulează" disabled
-        boolean alreadyCancelPending = a != null
-                && a.getStatus() == AttendanceStatus.PENDING
-                && a.getNota() != null
-                && a.getNota().startsWith(NOTA_CANCEL_PREFIX);
-
-        // RECOVERY PENDING: cerere de recuperare în așteptare → butonul "Cere recuperare" disabled
-        boolean alreadyRecoveryPending = a != null
-                && a.getStatus() == AttendanceStatus.PENDING
-                && a.getNota() != null
-                && a.getNota().startsWith(NOTA_RECOVERY_PREFIX);
-
-        boolean cancellable            = baseCondition && !alreadyProcessed && !alreadyCancelPending;
-        boolean recoveryRequestAllowed = baseCondition && !alreadyProcessed && !alreadyRecoveryPending;
-
+        // Date prezență
         AttendanceStatus childAttendanceStatus = (a != null ? a.getStatus()              : null);
         Integer assignedToSessionId            = (a != null ? a.getAssignedToSessionId() : null);
         boolean isRecoveryAttendance           = (a != null && a.isRecovery());
@@ -561,6 +557,59 @@ public class ParentServiceImpl implements ParentService {
                 assignedToSessionId,
                 isRecoveryAttendance
         );
+    }
+
+    /**
+     * Calculează datetime-ul de start al sesiunii pentru verificarea pragului de 24h.
+     * Dacă sesiunea nu are dată setată → returnează null (sesiunea nu poate fi acționată).
+     * Dacă sesiunea nu are oră setată → folosim MIDNIGHT ca fallback.
+     *
+     * @param s sesiunea de verificat
+     * @return  datetime-ul sesiunii sau null dacă data lipsește
+     */
+    private LocalDateTime computeSessionDateTime(Session s) {
+        if (s.getSessionDate() == null) return null;
+        LocalTime startTime = (s.getTime() != null) ? s.getTime() : LocalTime.MIDNIGHT;
+        return LocalDateTime.of(s.getSessionDate(), startTime);
+    }
+
+    /**
+     * Calculează flag-urile de acțiune pentru butoanele UI ale unei sesiuni.
+     *
+     * Logica flag-urilor:
+     *   alreadyProcessed      → EXCUSED sau RECOVERY_BOOKED → blochează AMBELE butoane
+     *   alreadyCancelPending  → PENDING + nota CANCEL_REQUEST → blochează doar "Anulează"
+     *   alreadyRecoveryPending → PENDING + nota RECOVERY_REQUEST → blochează "Cere recuperare"
+     *
+     * Ambele flag-uri sunt false dacă baseCondition e false (sesiune trecută sau non-PLANNED).
+     *
+     * @param a             attendance-ul curent al copilului pentru sesiune (null dacă nu există)
+     * @param baseCondition true dacă sesiunea e PLANNED și cel puțin 24h în viitor
+     * @return              array [cancellable, recoveryRequestAllowed]
+     */
+    private boolean[] computeActionFlags(Attendance a, boolean baseCondition) {
+        // PROCESATĂ: profesorul a confirmat deja O cerere (EXCUSED sau RECOVERY_BOOKED)
+        // → AMBELE butoane se dezactivează indiferent de tipul cererii confirmate
+        boolean alreadyProcessed = a != null
+                && (a.getStatus() == AttendanceStatus.EXCUSED
+                ||  a.getStatus() == AttendanceStatus.RECOVERY_BOOKED);
+
+        // CANCEL PENDING: cerere de anulare în așteptare → butonul "Anulează" disabled
+        boolean alreadyCancelPending = a != null
+                && a.getStatus() == AttendanceStatus.PENDING
+                && a.getNota() != null
+                && a.getNota().startsWith(NOTA_CANCEL_PREFIX);
+
+        // RECOVERY PENDING: cerere de recuperare în așteptare → butonul "Cere recuperare" disabled
+        boolean alreadyRecoveryPending = a != null
+                && a.getStatus() == AttendanceStatus.PENDING
+                && a.getNota() != null
+                && a.getNota().startsWith(NOTA_RECOVERY_PREFIX);
+
+        return new boolean[]{
+                baseCondition && !alreadyProcessed && !alreadyCancelPending,   // cancellable
+                baseCondition && !alreadyProcessed && !alreadyRecoveryPending  // recoveryRequestAllowed
+        };
     }
 
     /**

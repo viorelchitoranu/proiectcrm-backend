@@ -926,6 +926,25 @@ public class TeacherServiceImpl implements TeacherService {
      * @param a    attendance-ul de mapat (cererea părintelui)
      * @param type tipul cererii determinat din status + nota (CANCEL/RECOVERY)
      */
+    /**
+     * Mapează un Attendance + tipul cererii la TeacherParentRequestResponse.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda avea complexitate 18 (limita e 15) chiar după extragerea în variabile locale.
+     *   Cauza: expresiile ternare cu condiție dublă (&&) contribuie câte 2 la complexitate:
+     *     `g != null && g.getCourse() != null ? ...` = 2 (nu 1)
+     *     `g != null && g.getSchool() != null  ? ...` = 2 (nu 1)
+     *   Fix: cele 2 expresii compound extrase în metode helper private
+     *   (resolveCourseName, resolveSchoolName) → complexitate redusă la ~14.
+     *
+     * Toate câmpurile folosesc valori default sigure când entitatea lipsește:
+     *   - int/Integer → 0 (ex: childId, sessionId, groupId)
+     *   - String      → null (ex: parentName, groupName)
+     *   - Object      → null (ex: sessionDate, sessionTime)
+     *
+     * @param a    attendance-ul de mapat (cererea părintelui)
+     * @param type tipul cererii determinat din status + nota (CANCEL/RECOVERY)
+     */
     private TeacherParentRequestResponse mapToParentRequestResponse(
             Attendance a, AttendanceStatus type) {
 
@@ -954,16 +973,17 @@ public class TeacherServiceImpl implements TeacherService {
         LocalTime  sessionTime = s != null ? s.getTime() : null;
 
         // ── Câmpuri grupă ─────────────────────────────────────────────────────
-        int    groupId     = g != null ? g.getIdGroup() : 0;
-        String groupName   = g != null ? g.getGroupName() : null;
-        String courseName  = g != null && g.getCourse() != null ? g.getCourse().getName() : null;
-        String schoolName  = g != null && g.getSchool() != null ? g.getSchool().getName() : null;
+        int    groupId    = g != null ? g.getIdGroup() : 0;
+        String groupName  = g != null ? g.getGroupName() : null;
+        // Extrase în metode helper — condiția && dublu contribuia 2 la complexitate
+        String courseName = resolveCourseName(g);
+        String schoolName = resolveSchoolName(g);
 
         // ── Câmpuri tip cerere / status ───────────────────────────────────────
         // typeName: CANCEL_REQUEST sau RECOVERY_REQUEST — determinat de resolveRequestType()
-        String typeName        = type != null ? type.name() : null;
+        String typeName   = type != null ? type.name() : null;
         // statusName: starea curentă a attendance-ului (PENDING, EXCUSED etc.)
-        String statusName      = a.getStatus() != null ? a.getStatus().name() : null;
+        String statusName = a.getStatus() != null ? a.getStatus().name() : null;
 
         return new TeacherParentRequestResponse(
                 a.getIdAttendance(),
@@ -984,5 +1004,29 @@ public class TeacherServiceImpl implements TeacherService {
                 a.getAssignedToSessionId(),
                 statusName
         );
+    }
+
+    /**
+     * Returnează numele cursului grupei sau null dacă lipsește.
+     * Extrasă din mapToParentRequestResponse pentru a reduce complexitatea ciclomatică —
+     * condiția `g != null && g.getCourse() != null` contribuia 2 puncte de complexitate.
+     *
+     * @param g grupa (poate fi null)
+     * @return  numele cursului sau null
+     */
+    private String resolveCourseName(GroupClass g) {
+        return g != null && g.getCourse() != null ? g.getCourse().getName() : null;
+    }
+
+    /**
+     * Returnează numele școlii grupei sau null dacă lipsește.
+     * Extrasă din mapToParentRequestResponse pentru a reduce complexitatea ciclomatică —
+     * condiția `g != null && g.getSchool() != null` contribuia 2 puncte de complexitate.
+     *
+     * @param g grupa (poate fi null)
+     * @return  numele școlii sau null
+     */
+    private String resolveSchoolName(GroupClass g) {
+        return g != null && g.getSchool() != null ? g.getSchool().getName() : null;
     }
 }

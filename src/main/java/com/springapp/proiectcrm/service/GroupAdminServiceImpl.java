@@ -752,20 +752,67 @@ public class GroupAdminServiceImpl implements GroupAdminService {
      * @param now   timestamp-ul arhivării
      * @return      înregistrarea de arhivă completată
      */
+    /**
+     * Convertește un Attendance în AttendanceArchive pentru ștergerea completă a grupei.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 22 (limita e 15) din cauza celor 15+
+     *   expresii ternare (null checks) inline.
+     *   Setter-urile au fost grupate în 3 metode private cu responsabilitate unică:
+     *     fillGroupSessionFieldsForDelete() → câmpuri grupă + sesiune cu fallback pe group
+     *     fillChildParentFieldsForDelete()  → câmpuri copil + părinte (GDPR snapshot)
+     *     fillOriginalFieldsForDelete()     → câmpurile originale ale attendance-ului
+     *
+     * Diferență față de toArchiveRecord() din AttendanceArchiveServiceImpl:
+     *   Când Session este null (date inconsistente), folosim grupa curentă ca fallback
+     *   pentru a păstra informațiile grupei în arhivă — util la ștergere completă.
+     *
+     * @param a     attendance-ul de arhivat
+     * @param group grupa care se șterge (folosit ca fallback dacă session e null)
+     * @param now   timestamp-ul arhivării
+     * @return      înregistrarea de arhivă completată
+     */
     private AttendanceArchive toArchiveRecordForGroupDelete(
             Attendance a, GroupClass group, LocalDateTime now) {
 
-        Session s       = a.getSession();
-        GroupClass g    = (s != null) ? s.getGroup() : group;
-        Child child     = a.getChild();
-        User parent     = (child != null) ? child.getParent() : null;
+        Session s    = a.getSession();
+        GroupClass g = (s != null) ? s.getGroup() : group;
+        Child child  = a.getChild();
+        User parent  = (child != null) ? child.getParent() : null;
 
         AttendanceArchive ar = new AttendanceArchive();
 
+        // IDs originale — pentru trasat înapoi la înregistrările originale dacă e nevoie
         ar.setOriginalAttendanceId(a.getIdAttendance());
         ar.setOriginalSessionId(s != null ? s.getIdSession() : null);
+        // fallback pe group.getIdGroup() dacă g e null — garantează că grupul e mereu prezent în arhivă
         ar.setOriginalGroupId(g != null ? g.getIdGroup() : group.getIdGroup());
 
+        fillGroupSessionFieldsForDelete(ar, g, s, group);  // snapshot grupă + sesiune cu fallback
+        fillChildParentFieldsForDelete(ar, child, parent); // snapshot copil + părinte (GDPR)
+        fillOriginalFieldsForDelete(ar, a, now);           // câmpuri originale attendance + metadata
+
+        return ar;
+    }
+
+    /**
+     * Completează câmpurile grupei și sesiunii în arhivă cu fallback pe grupa ștearsă.
+     *
+     * Diferență față de fillGroupSessionFields() din AttendanceArchiveServiceImpl:
+     *   groupName și groupId folosesc `group` ca fallback când `g` e null — asigură
+     *   că arhiva păstrează referința la grupă chiar și când sesiunea nu mai are grupă.
+     *
+     * courseName/schoolName/teacherName: null dacă lipsesc relațiile.
+     * sessionDate/Time/Status/Type: null dacă attendance-ul nu are sesiune (date vechi).
+     *
+     * @param ar    arhiva de completat
+     * @param g     grupa sesiunii (poate fi null — se folosește fallback)
+     * @param s     sesiunea originală (poate fi null pentru date vechi)
+     * @param group grupa care se șterge — fallback când g e null
+     */
+    private void fillGroupSessionFieldsForDelete(
+            AttendanceArchive ar, GroupClass g, Session s, GroupClass group) {
+        // groupName: fallback pe group.getGroupName() dacă g e null
         ar.setGroupName(g != null ? g.getGroupName() : group.getGroupName());
         ar.setCourseName(g != null && g.getCourse()   != null ? g.getCourse().getName()   : null);
         ar.setSchoolName(g != null && g.getSchool()   != null ? g.getSchool().getName()   : null);
@@ -777,25 +824,53 @@ public class GroupAdminServiceImpl implements GroupAdminService {
         ar.setSessionTime(s != null ? s.getTime()           : null);
         ar.setSessionStatus(s != null ? s.getSessionStatus() : null);
         ar.setSessionType(s != null ? s.getSessionType()     : null);
+    }
 
+    /**
+     * Completează câmpurile copilului și părintelui în arhivă.
+     *
+     * GDPR: stocăm snapshot-ul datelor personale la momentul arhivării.
+     * Dacă contul de părinte e șters ulterior, arhiva păstrează datele
+     * pentru audit și raportare istorică.
+     *
+     * parentName: concatenare LastName + FirstName, null dacă copilul nu are părinte.
+     *
+     * @param ar     arhiva de completat
+     * @param child  copilul asociat attendance-ului (poate fi null)
+     * @param parent părintele copilului (poate fi null)
+     */
+    private void fillChildParentFieldsForDelete(
+            AttendanceArchive ar, Child child, User parent) {
         ar.setChildId(child != null ? child.getIdChild()            : null);
         ar.setChildFirstName(child != null ? child.getChildFirstName() : null);
         ar.setChildLastName(child != null ? child.getChildLastName()   : null);
 
-        ar.setParentId(parent != null ? parent.getIdUser()                              : null);
+        ar.setParentId(parent != null ? parent.getIdUser()                               : null);
         ar.setParentName(parent != null ? parent.getLastName() + " " + parent.getFirstName() : null);
         ar.setParentEmail(parent != null ? parent.getEmail()  : null);
         ar.setParentPhone(parent != null ? parent.getPhone()  : null);
+    }
 
+    /**
+     * Completează câmpurile originale ale attendance-ului și metadata arhivării.
+     *
+     * Câmpurile originale sunt copiate 1:1 din attendance — nu se modifică nimic.
+     * archivedAt: timestamp calculat o dată pentru toată lista (nu LocalDateTime.now()
+     * per element) pentru consistență și performanță.
+     *
+     * @param ar  arhiva de completat
+     * @param a   attendance-ul original
+     * @param now timestamp arhivării (calculat o dată în deleteGroupSafe)
+     */
+    private void fillOriginalFieldsForDelete(
+            AttendanceArchive ar, Attendance a, LocalDateTime now) {
         ar.setAttendanceStatus(a.getStatus());
         ar.setNota(a.getNota());
         ar.setCreatedAt(a.getCreatedAt());
         ar.setUpdatedAt(a.getUpdatedAt());
         ar.setRecovery(a.isRecovery());
         ar.setRecoveryForSessionId(a.getRecoveryForSessionId());
-
         ar.setArchivedAt(now);
-        return ar;
     }
 
     /**
