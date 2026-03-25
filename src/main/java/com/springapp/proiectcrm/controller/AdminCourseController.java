@@ -17,6 +17,7 @@ import java.util.List;
 public class AdminCourseController {
     private final CourseRepository courseRepository;
     private final GroupClassRepository groupClassRepository;
+    private static final String COURSE_NOT_FOUND = "Course not found";
 
 
     @GetMapping
@@ -49,7 +50,7 @@ public class AdminCourseController {
     @GetMapping("/{id}")
     public CourseResponse getCourseById(@PathVariable int id) {
         Course course = courseRepository.findById(id).orElseThrow(
-                () -> new IllegalArgumentException("Course not found"));
+                () -> new IllegalArgumentException(COURSE_NOT_FOUND));
         return new CourseResponse(
                 course.getIdCourse(),
                 course.getName(),
@@ -63,7 +64,7 @@ public class AdminCourseController {
             @RequestBody CourseCreateRequest request
     ) {
         Course course = courseRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Course not found"));
+                .orElseThrow(() -> new IllegalArgumentException(COURSE_NOT_FOUND));
 
         course.setName(request.getName());
         Course saved = courseRepository.save(course);
@@ -78,7 +79,7 @@ public class AdminCourseController {
     @DeleteMapping("/{id}")
     public void deleteCourse(@PathVariable int id) {
         Course course = courseRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Course not found"));
+                .orElseThrow(() -> new IllegalArgumentException(COURSE_NOT_FOUND));
 
         boolean hasGroups = !groupClassRepository.findByCourse(course).isEmpty();
         if (hasGroups) {

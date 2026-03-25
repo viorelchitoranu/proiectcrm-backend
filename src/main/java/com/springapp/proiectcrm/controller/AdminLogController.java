@@ -7,7 +7,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -48,6 +47,10 @@ import java.util.Map;
 @Slf4j
 public class AdminLogController {
 
+    private static final String PARAM_ERROR    = "error";
+    private static final String FILE_APP       = "app";
+    private static final String FILE_ERROR     = "error";
+
     /** Calea fișierelor de log — configurată în application.properties */
     @Value("${logging.file.path:./logs}")
     private String logFilePath;
@@ -73,7 +76,7 @@ public class AdminLogController {
      * @param filter text de filtrare (optional)
      */
     @GetMapping
-    public ResponseEntity<?> getLogs(
+    public ResponseEntity<Object> getLogs(
             @RequestParam(defaultValue = "error")  String file,
             @RequestParam(defaultValue = "200")    int    lines,
             @RequestParam(required = false)        String filter
@@ -82,9 +85,9 @@ public class AdminLogController {
 
         // Validare strictă a numelui fișierului — previne path traversal attack
         // (ex: file=../../etc/passwd ar putea citi fișiere sensibile de pe server)
-        if (!"app".equals(file) && !"error".equals(file)) {
+        if (!FILE_APP.equals(file) && !FILE_ERROR.equals(file)) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Fisier invalid. Valori acceptate: 'app', 'error'"));
+                    .body(Map.of(PARAM_ERROR, "Fisier invalid. Valori acceptate: 'app', 'error'"));
         }
 
         // Limitare la maxim 1000 linii — protecție contra timeout și memorie
@@ -96,7 +99,7 @@ public class AdminLogController {
         if (!Files.exists(logPath)) {
             // Fișierul poate să nu existe în dev (nu s-a scris niciun log încă)
             return ResponseEntity.status(404)
-                    .body(Map.of("error", "Fisierul " + file + ".log nu exista pe server.",
+                    .body(Map.of(PARAM_ERROR, "Fisierul " + file + ".log nu exista pe server.",
                             "path", logFilePath));
         }
 
@@ -127,7 +130,7 @@ public class AdminLogController {
         } catch (IOException e) {
             log.error("Eroare la citirea fisierului de log: {}", logPath, e);
             return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Eroare la citirea fisierului de log."));
+                    .body(Map.of(PARAM_ERROR, "Eroare la citirea fisierului de log."));
         }
     }
 

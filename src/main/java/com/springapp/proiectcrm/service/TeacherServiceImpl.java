@@ -30,6 +30,9 @@ public class TeacherServiceImpl implements TeacherService {
 
     private static final ZoneId APP_ZONE = ZoneId.of("Europe/Bucharest");
     private static final String TEACHER_ROLE_NAME = "TEACHER";
+    private static final String ATTENDENCE_NOT_FOUND = "Attendance not found.";
+    private static final String RECOVERY_REQUEST = "RECOVERY_REQUEST";
+    private static final String CANCEL_REQUEST = "CANCEL_REQUEST";
 
     @Override
     public List<TeacherGroupSummaryResponse> getTeacherGroups(String authenticatedEmail) {
@@ -242,6 +245,13 @@ public class TeacherServiceImpl implements TeacherService {
             int attendanceId,
             TeacherAllocateRecoveryRequest request
     ) {
+        // REFACTORIZARE (SonarCloud — Cognitive Complexity):
+        // Metoda originală avea complexitate 30 (limita e 15).
+        // Validările au fost extrase în 3 metode private:
+        //   validateOriginalAttendance()  → validări pe attendance original
+        //   validateTargetSession()       → validări pe sesiunea țintă
+        //   bookRecovery()                → salvare attendance recovery + update original
+
         if (request == null || request.getTargetSessionId() <= 0) {
             throw new BusinessException(
                     ErrorCode.BUSINESS_RULE_VIOLATION,
@@ -254,26 +264,14 @@ public class TeacherServiceImpl implements TeacherService {
         Attendance original = attendanceRepository.findById(attendanceId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.SESSION_NOT_FOUND,
-                        "Attendance not found."
+                        ATTENDENCE_NOT_FOUND
                 ));
 
-        Session originalSession = original.getSession();
-        if (originalSession == null || originalSession.getGroup() == null) {
-            throw new BusinessException(
-                    ErrorCode.BUSINESS_RULE_VIOLATION,
-                    "Attendance-ul nu are grupă/sesiune valide."
-            );
-        }
+        // Pasul 1: validări pe attendance original (sesiune, teacher, status, copil)
+        GroupClass originalGroup = validateOriginalAttendance(original, teacher);
+        Child child = original.getChild();
 
-        GroupClass originalGroup = originalSession.getGroup();
-
-        if (originalGroup.getTeacher() == null || originalGroup.getTeacher().getIdUser() != teacher.getIdUser()) {
-            throw new BusinessException(
-                    ErrorCode.ACCESS_DENIED,
-                    "Această cerere nu aparține profesorului autentificat."
-            );
-        }
-
+        // Pasul 2: idempotență — dacă e deja alocat pe aceeași sesiune țintă → return
         if (original.getStatus() == AttendanceStatus.RECOVERY_BOOKED) {
             if (original.getAssignedToSessionId() != null
                     && original.getAssignedToSessionId().equals(request.getTargetSessionId())) {
@@ -285,10 +283,61 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        boolean isPendingRecovery =
-                original.getStatus() == AttendanceStatus.PENDING
-                        && original.getNota() != null
-                        && original.getNota().trim().startsWith("RECOVERY_REQUEST");
+        // Pasul 3: validări pe sesiunea țintă (grupă, școală, sloturi, dată)
+        Session targetSession = sessionRepository.findById(request.getTargetSessionId())
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.SESSION_NOT_FOUND,
+                        "Target session not found."
+                ));
+
+        validateTargetSession(targetSession, original.getSession(), originalGroup);
+
+        // Pasul 4: verificare slot disponibil și salvare
+        long used = attendanceRepository.countRecoveryForSession(targetSession);
+        Integer targetMaxSlots = targetSession.getGroup().getMaxRecoverySlots();
+        if (used >= targetMaxSlots) {
+            throw new BusinessException(
+                    ErrorCode.BUSINESS_RULE_VIOLATION,
+                    "Nu mai sunt locuri de recuperare disponibile pentru această sesiune."
+            );
+        }
+
+        bookRecovery(original, targetSession, child);
+    }
+
+    /**
+     * Validează attendance-ul original înainte de alocarea recuperării.
+     *
+     * Verifică:
+     *   - Are sesiune și grupă valide
+     *   - Aparține grupei profesorului autentificat
+     *   - Status este RECOVERY_REQUESTED sau PENDING(RECOVERY_REQUEST)
+     *   - Nu este el însuși un attendance de recovery
+     *   - Are copil asociat și copilul este activ în grupă
+     *
+     * @return grupa originală (pentru validările ulterioare)
+     */
+    private GroupClass validateOriginalAttendance(Attendance original, User teacher) {
+        Session originalSession = original.getSession();
+        if (originalSession == null || originalSession.getGroup() == null) {
+            throw new BusinessException(
+                    ErrorCode.BUSINESS_RULE_VIOLATION,
+                    "Attendance-ul nu are grupă/sesiune valide."
+            );
+        }
+
+        GroupClass originalGroup = originalSession.getGroup();
+        if (originalGroup.getTeacher() == null
+                || originalGroup.getTeacher().getIdUser() != teacher.getIdUser()) {
+            throw new BusinessException(
+                    ErrorCode.ACCESS_DENIED,
+                    "Această cerere nu aparține profesorului autentificat."
+            );
+        }
+
+        boolean isPendingRecovery = original.getStatus() == AttendanceStatus.PENDING
+                && original.getNota() != null
+                && original.getNota().trim().startsWith(RECOVERY_REQUEST);
 
         if (!(original.getStatus() == AttendanceStatus.RECOVERY_REQUESTED || isPendingRecovery)) {
             throw new BusinessException(
@@ -319,11 +368,26 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        Session targetSession = sessionRepository.findById(request.getTargetSessionId())
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.SESSION_NOT_FOUND,
-                        "Target session not found."
-                ));
+        return originalGroup;
+    }
+
+    /**
+     * Validează sesiunea țintă pentru alocarea recuperării.
+     *
+     * Verifică:
+     *   - Are grupă asociată
+     *   - Aceeași școală ca sesiunea originală
+     *   - Grupa țintă permite recuperări (maxRecoverySlots > 0)
+     *   - Status PLANNED
+     *   - Data în viitor
+     *   - Nu e aceeași sesiune ca cea originală
+     *
+     * @param targetSession   sesiunea pe care se alocă recuperarea
+     * @param originalSession sesiunea originală ratată
+     * @param originalGroup   grupa originală (pentru verificarea școlii)
+     */
+    private void validateTargetSession(
+            Session targetSession, Session originalSession, GroupClass originalGroup) {
 
         GroupClass targetGroup = targetSession.getGroup();
         if (targetGroup == null) {
@@ -333,9 +397,10 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        School origSchool = originalGroup.getSchool();
+        School origSchool   = originalGroup.getSchool();
         School targetSchool = targetGroup.getSchool();
-        if (origSchool == null || targetSchool == null || origSchool.getIdSchool() != targetSchool.getIdSchool()) {
+        if (origSchool == null || targetSchool == null
+                || origSchool.getIdSchool() != targetSchool.getIdSchool()) {
             throw new BusinessException(
                     ErrorCode.BUSINESS_RULE_VIOLATION,
                     "Recuperarea se poate aloca doar în aceeași școală."
@@ -357,7 +422,8 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        if (targetSession.getSessionDate() == null || targetSession.getSessionDate().isBefore(LocalDate.now())) {
+        if (targetSession.getSessionDate() == null
+                || targetSession.getSessionDate().isBefore(LocalDate.now())) {
             throw new BusinessException(
                     ErrorCode.BUSINESS_RULE_VIOLATION,
                     "Nu poți aloca recuperare pe sesiuni din trecut."
@@ -370,38 +436,43 @@ public class TeacherServiceImpl implements TeacherService {
                     "Sesiunea țintă nu poate fi aceeași cu sesiunea originală."
             );
         }
+    }
 
-        long used = attendanceRepository.countRecoveryForSession(targetSession);
-        if (used >= targetMaxSlots) {
-            throw new BusinessException(
-                    ErrorCode.BUSINESS_RULE_VIOLATION,
-                    "Nu mai sunt locuri de recuperare disponibile pentru această sesiune."
-            );
-        }
+    /**
+     * Salvează attendance-ul de recovery și actualizează cel original.
+     *
+     * Dacă există deja un attendance de recovery pentru această sesiune+copil
+     * (creat anterior), îl refolosim și doar actualizăm originalul.
+     * Altfel, creăm un attendance nou de recovery.
+     *
+     * @param original      attendance-ul original de actualizat
+     * @param targetSession sesiunea pe care se face recuperarea
+     * @param child         copilul pentru care se alocă recuperarea
+     */
+    private void bookRecovery(Attendance original, Session targetSession, Child child) {
+        Session originalSession = original.getSession();
+        LocalDateTime now = LocalDateTime.now();
 
         Optional<Attendance> existing = attendanceRepository.findBySessionAndChild(targetSession, child);
         if (existing.isPresent()) {
             Attendance ex = existing.get();
-
             if (ex.isRecovery()
                     && ex.getRecoveryForSessionId() != null
                     && ex.getRecoveryForSessionId().equals(originalSession.getIdSession())) {
-                LocalDateTime now = LocalDateTime.now();
+                // Recovery deja creat pentru această sesiune — doar actualizăm originalul
                 original.setAssignedToSessionId(targetSession.getIdSession());
                 original.setStatus(AttendanceStatus.RECOVERY_BOOKED);
                 original.setUpdatedAt(now);
                 attendanceRepository.save(original);
                 return;
             }
-
             throw new BusinessException(
                     ErrorCode.BUSINESS_RULE_VIOLATION,
                     "Copilul are deja o prezență pentru această sesiune țintă."
             );
         }
 
-        LocalDateTime now = LocalDateTime.now();
-
+        // Creare attendance nou de recovery
         Attendance recovery = new Attendance();
         recovery.setSession(targetSession);
         recovery.setChild(child);
@@ -411,13 +482,12 @@ public class TeacherServiceImpl implements TeacherService {
         recovery.setRecovery(true);
         recovery.setRecoveryForSessionId(originalSession.getIdSession());
         recovery.setNota(original.getNota());
-
         attendanceRepository.save(recovery);
 
+        // Actualizare attendance original
         original.setStatus(AttendanceStatus.RECOVERY_BOOKED);
         original.setAssignedToSessionId(targetSession.getIdSession());
         original.setUpdatedAt(now);
-
         attendanceRepository.save(original);
     }
 
@@ -502,14 +572,48 @@ public class TeacherServiceImpl implements TeacherService {
             String authenticatedEmail,
             int attendanceId
     ) {
+        // REFACTORIZARE (SonarCloud — Cognitive Complexity):
+        // Metoda originală avea complexitate 31 (limita e 15).
+        // Validările au fost extrase în validateRecoveryTargetRequest()
+        // iar mapping-ul sesiunii în toRecoveryTargetResponse().
+
         User teacher = getAuthenticatedTeacher(authenticatedEmail);
 
         Attendance original = attendanceRepository.findById(attendanceId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.SESSION_NOT_FOUND,
-                        "Attendance not found."
+                        ATTENDENCE_NOT_FOUND
                 ));
 
+        // Validare și extragere școală
+        School school = validateRecoveryTargetRequest(original, teacher);
+
+        List<Session> targets = sessionRepository.findPlannedFutureRecoveryTargetsBySchool(
+                school,
+                LocalDate.now(),
+                SessionStatus.PLANNED
+        );
+
+        // Filtrare și mapping — extrase în metodă privată
+        return targets.stream()
+                .filter(s -> isEligibleRecoveryTarget(s, original.getSession()))
+                .map(s -> toRecoveryTargetResponse(s, attendanceRepository.countRecoveryForSession(s)))
+                .toList();
+    }
+
+    /**
+     * Validează că cererea de recovery este validă și returnează școala
+     * pe care se vor căuta sesiunile țintă.
+     *
+     * Verifică:
+     *   - Attendance are sesiune și grupă valide
+     *   - Aparține grupei profesorului autentificat
+     *   - Status este RECOVERY_REQUESTED sau PENDING(RECOVERY_REQUEST)
+     *   - Poate determina școala cererii
+     *
+     * @return școala sesiunii originale (pentru căutarea sesiunilor țintă)
+     */
+    private School validateRecoveryTargetRequest(Attendance original, User teacher) {
         Session origSession = original.getSession();
         GroupClass origGroup = (origSession != null) ? origSession.getGroup() : null;
 
@@ -520,17 +624,17 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        if (origGroup.getTeacher() == null || origGroup.getTeacher().getIdUser() != teacher.getIdUser()) {
+        if (origGroup.getTeacher() == null
+                || origGroup.getTeacher().getIdUser() != teacher.getIdUser()) {
             throw new BusinessException(
                     ErrorCode.ACCESS_DENIED,
                     "Nu ai drepturi pe această cerere."
             );
         }
 
-        boolean isPendingRecovery =
-                original.getStatus() == AttendanceStatus.PENDING
-                        && original.getNota() != null
-                        && original.getNota().trim().startsWith("RECOVERY_REQUEST");
+        boolean isPendingRecovery = original.getStatus() == AttendanceStatus.PENDING
+                && original.getNota() != null
+                && original.getNota().trim().startsWith(RECOVERY_REQUEST);
 
         if (!(original.getStatus() == AttendanceStatus.RECOVERY_REQUESTED || isPendingRecovery)) {
             throw new BusinessException(
@@ -539,7 +643,10 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        School school = (origSession.getSchool() != null) ? origSession.getSchool() : origGroup.getSchool();
+        School school = (origSession.getSchool() != null)
+                ? origSession.getSchool()
+                : origGroup.getSchool();
+
         if (school == null) {
             throw new BusinessException(
                     ErrorCode.BUSINESS_RULE_VIOLATION,
@@ -547,46 +654,50 @@ public class TeacherServiceImpl implements TeacherService {
             );
         }
 
-        List<Session> targets = sessionRepository.findPlannedFutureRecoveryTargetsBySchool(
-                school,
-                LocalDate.now(),
-                SessionStatus.PLANNED
+        return school;
+    }
+
+    /**
+     * Verifică dacă o sesiune este eligibilă ca țintă de recuperare.
+     * Excludem: sesiunea originală, sesiuni fără grupă,
+     * grupe fără sloturi de recuperare și sesiunile deja pline.
+     */
+    private boolean isEligibleRecoveryTarget(Session s, Session origSession) {
+        if (s.getIdSession() == origSession.getIdSession()) return false;
+        GroupClass g = s.getGroup();
+        if (g == null) return false;
+        Integer max = g.getMaxRecoverySlots();
+        if (max == null || max <= 0) return false;
+        long used = attendanceRepository.countRecoveryForSession(s);
+        return used < max;
+    }
+
+    /**
+     * Construiește un TeacherRecoveryTargetSessionResponse dintr-o sesiune eligibilă.
+     * schoolName: din sesiune, cu fallback pe grupă.
+     */
+    private TeacherRecoveryTargetSessionResponse toRecoveryTargetResponse(Session s, long used) {
+        GroupClass g = s.getGroup();
+        User t = g.getTeacher();
+        Integer max = g.getMaxRecoverySlots();
+
+        String schoolName = s.getSchool() != null
+                ? s.getSchool().getName()
+                : (g.getSchool() != null ? g.getSchool().getName() : null);
+
+        return new TeacherRecoveryTargetSessionResponse(
+                s.getIdSession(),
+                s.getSessionDate(),
+                s.getTime(),
+                g.getIdGroup(),
+                g.getGroupName(),
+                g.getCourse() != null ? g.getCourse().getName() : null,
+                t != null ? t.getIdUser() : 0,
+                t != null ? t.getLastName() + " " + t.getFirstName() : null,
+                schoolName,
+                used,
+                max
         );
-
-        List<TeacherRecoveryTargetSessionResponse> out = new ArrayList<>();
-
-        for (Session s : targets) {
-            if (s.getIdSession() == origSession.getIdSession()) continue;
-
-            GroupClass g = s.getGroup();
-            if (g == null) continue;
-
-            Integer max = g.getMaxRecoverySlots();
-            if (max == null || max <= 0) continue;
-
-            long used = attendanceRepository.countRecoveryForSession(s);
-            if (used >= max) continue;
-
-            User t = g.getTeacher();
-
-            out.add(new TeacherRecoveryTargetSessionResponse(
-                    s.getIdSession(),
-                    s.getSessionDate(),
-                    s.getTime(),
-                    g.getIdGroup(),
-                    g.getGroupName(),
-                    g.getCourse() != null ? g.getCourse().getName() : null,
-                    t != null ? t.getIdUser() : 0,
-                    t != null ? t.getLastName() + " " + t.getFirstName() : null,
-                    s.getSchool() != null
-                            ? s.getSchool().getName()
-                            : (g.getSchool() != null ? g.getSchool().getName() : null),
-                    used,
-                    max
-            ));
-        }
-
-        return out;
     }
 
     @Override
@@ -597,7 +708,7 @@ public class TeacherServiceImpl implements TeacherService {
         Attendance a = attendanceRepository.findById(attendanceId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.SESSION_NOT_FOUND,
-                        "Attendance not found."
+                        ATTENDENCE_NOT_FOUND
                 ));
 
         Session s = a.getSession();
@@ -614,7 +725,7 @@ public class TeacherServiceImpl implements TeacherService {
         boolean isPendingCancel =
                 a.getStatus() == AttendanceStatus.PENDING
                         && note != null
-                        && note.trim().startsWith("CANCEL_REQUEST");
+                        && note.trim().startsWith(CANCEL_REQUEST);
 
         if (!(a.getStatus() == AttendanceStatus.CANCELLED_BY_PARENT || isPendingCancel)) {
             throw new BusinessException(
@@ -693,8 +804,8 @@ public class TeacherServiceImpl implements TeacherService {
         String nota = (a.getNota() == null) ? "" : a.getNota().trim();
 
         if (st == AttendanceStatus.PENDING) {
-            if (nota.startsWith("CANCEL_REQUEST")) return AttendanceStatus.CANCELLED_BY_PARENT;
-            if (nota.startsWith("RECOVERY_REQUEST")) return AttendanceStatus.RECOVERY_REQUESTED;
+            if (nota.startsWith(CANCEL_REQUEST)) return AttendanceStatus.CANCELLED_BY_PARENT;
+            if (nota.startsWith(RECOVERY_REQUEST)) return AttendanceStatus.RECOVERY_REQUESTED;
             return null;
         }
 
@@ -797,33 +908,81 @@ public class TeacherServiceImpl implements TeacherService {
         return "ONGOING";
     }
 
-    private TeacherParentRequestResponse mapToParentRequestResponse(Attendance a, AttendanceStatus type) {
-        Session s = a.getSession();
-        GroupClass g = s != null ? s.getGroup() : null;
-        Child child = a.getChild();
-        User parent = child != null ? child.getParent() : null;
+    /**
+     * Mapează un Attendance + tipul cererii la TeacherParentRequestResponse.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 18 (limita e 15) din cauza
+     *   a 15+ expresii ternare nested direct în constructorul DTO-ului.
+     *   Fix: extracem câmpurile în variabile locale cu nume descriptive
+     *   înainte de apelul constructorului — fiecare variabilă rezolvă
+     *   o singură expresie ternară, reducând complexitatea la ~5.
+     *
+     * Toate câmpurile folosesc valori default sigure când entitatea lipsește:
+     *   - int/Integer → 0 (ex: childId, sessionId, groupId)
+     *   - String      → null (ex: parentName, groupName)
+     *   - Object      → null (ex: sessionDate, sessionTime)
+     *
+     * @param a    attendance-ul de mapat (cererea părintelui)
+     * @param type tipul cererii determinat din status + nota (CANCEL/RECOVERY)
+     */
+    private TeacherParentRequestResponse mapToParentRequestResponse(
+            Attendance a, AttendanceStatus type) {
 
-        String parentName = parent != null ? parent.getLastName() + " " + parent.getFirstName() : null;
-        String childName = child != null ? child.getChildLastName() + " " + child.getChildFirstName() : null;
+        // ── Extragere entități asociate ───────────────────────────────────────
+        Session    s      = a.getSession();
+        GroupClass g      = s != null ? s.getGroup() : null;
+        Child      child  = a.getChild();
+        User       parent = child != null ? child.getParent() : null;
+
+        // ── Câmpuri copil ─────────────────────────────────────────────────────
+        int    childId   = child != null ? child.getIdChild() : 0;
+        String childName = child != null
+                ? child.getChildLastName() + " " + child.getChildFirstName()
+                : null;
+
+        // ── Câmpuri părinte ───────────────────────────────────────────────────
+        String parentName  = parent != null
+                ? parent.getLastName() + " " + parent.getFirstName()
+                : null;
+        String parentPhone = parent != null ? parent.getPhone() : null;
+        String parentEmail = parent != null ? parent.getEmail() : null;
+
+        // ── Câmpuri sesiune ───────────────────────────────────────────────────
+        int        sessionId   = s != null ? s.getIdSession() : 0;
+        LocalDate  sessionDate = s != null ? s.getSessionDate() : null;
+        LocalTime  sessionTime = s != null ? s.getTime() : null;
+
+        // ── Câmpuri grupă ─────────────────────────────────────────────────────
+        int    groupId     = g != null ? g.getIdGroup() : 0;
+        String groupName   = g != null ? g.getGroupName() : null;
+        String courseName  = g != null && g.getCourse() != null ? g.getCourse().getName() : null;
+        String schoolName  = g != null && g.getSchool() != null ? g.getSchool().getName() : null;
+
+        // ── Câmpuri tip cerere / status ───────────────────────────────────────
+        // typeName: CANCEL_REQUEST sau RECOVERY_REQUEST — determinat de resolveRequestType()
+        String typeName        = type != null ? type.name() : null;
+        // statusName: starea curentă a attendance-ului (PENDING, EXCUSED etc.)
+        String statusName      = a.getStatus() != null ? a.getStatus().name() : null;
 
         return new TeacherParentRequestResponse(
                 a.getIdAttendance(),
-                child != null ? child.getIdChild() : 0,
+                childId,
                 childName,
                 parentName,
-                parent != null ? parent.getPhone() : null,
-                parent != null ? parent.getEmail() : null,
-                s != null ? s.getIdSession() : 0,
-                s != null ? s.getSessionDate() : null,
-                s != null ? s.getTime() : null,
-                g != null ? g.getGroupName() : null,
-                g != null && g.getCourse() != null ? g.getCourse().getName() : null,
-                g != null && g.getSchool() != null ? g.getSchool().getName() : null,
-                type != null ? type.name() : null,
+                parentPhone,
+                parentEmail,
+                sessionId,
+                sessionDate,
+                sessionTime,
+                groupName,
+                courseName,
+                schoolName,
+                typeName,
                 a.getNota(),
-                g != null ? g.getIdGroup() : 0,
+                groupId,
                 a.getAssignedToSessionId(),
-                a.getStatus() != null ? a.getStatus().name() : null
+                statusName
         );
     }
 }

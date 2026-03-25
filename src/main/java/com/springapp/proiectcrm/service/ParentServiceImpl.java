@@ -62,6 +62,7 @@ public class ParentServiceImpl implements ParentService {
     // calculul flag-urilor din getChildGroupSchedule(). Orice schimbare → actualizați TOATE locurile.
     private static final String NOTA_CANCEL_PREFIX   = "CANCEL_REQUEST";
     private static final String NOTA_RECOVERY_PREFIX = "RECOVERY_REQUEST";
+    private static final String CHILD_NOT_IN_GROUP = "Copilul nu este înscris în această grupă.";
 
     // ── Vizualizare copii ─────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ public class ParentServiceImpl implements ParentService {
 
         ChildGroup childGroup = childGroupRepository.findByChildAndGroup(child, group)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.CHILD_NOT_IN_GROUP, "Copilul nu este înscris în această grupă."));
+                        ErrorCode.CHILD_NOT_IN_GROUP, CHILD_NOT_IN_GROUP));
 
         if (Boolean.FALSE.equals(childGroup.getActive())) {
             throw new BusinessException(
@@ -176,82 +177,10 @@ public class ParentServiceImpl implements ParentService {
             });
         }
 
+        // Mapping extras în metodă privată — reduce complexitatea ciclomatică
         List<SessionSummaryResponse> sessionSummaries = sessions.stream()
-                .filter(s -> {
-                    // Filtrăm sesiunile anterioare datei de start confirmate
-                    if (filterFrom == null || s.getSessionDate() == null) return true;
-                    return !s.getSessionDate().isBefore(filterFrom);
-                })
-                .map(s -> {
-                    String schoolName    = s.getSchool() != null ? s.getSchool().getName()    : (group.getSchool() != null ? group.getSchool().getName()    : null);
-                    String schoolAddress = s.getSchool() != null ? s.getSchool().getAddress() : (group.getSchool() != null ? group.getSchool().getAddress() : null);
-
-                    // Calculăm datetime-ul sesiunii pentru verificarea celor 24h
-                    LocalDateTime sessionDateTime = null;
-                    if (s.getSessionDate() != null) {
-                        LocalTime startTime = (s.getTime() != null) ? s.getTime() : LocalTime.MIDNIGHT;
-                        sessionDateTime = LocalDateTime.of(s.getSessionDate(), startTime);
-                    }
-
-                    boolean isPlanned      = s.getSessionStatus() == SessionStatus.PLANNED;
-                    boolean atLeast24hBefore = sessionDateTime != null
-                            && !sessionDateTime.isBefore(now.plusHours(24));
-
-                    // ── Calcul flag-uri de acțiune ────────────────────────────
-                    // Condiția de bază: sesiune PLANNED și cel puțin 24h distanță
-                    boolean baseCondition = isPlanned && atLeast24hBefore;
-
-                    Attendance a = attendanceBySessionId.get(s.getIdSession());
-
-                    // PROCESATĂ: profesorul a confirmat deja O cerere pe această sesiune?
-                    // EXCUSED       = profesorul a aprobat cererea de anulare
-                    // RECOVERY_BOOKED = profesorul a alocat sesiunea de recuperare
-                    // În ambele cazuri, sesiunea este considerată "rezolvată" →
-                    // AMBELE butoane se dezactivează, indiferent de tipul cererii confirmate.
-                    boolean alreadyProcessed = a != null
-                            && (a.getStatus() == AttendanceStatus.EXCUSED
-                            || a.getStatus() == AttendanceStatus.RECOVERY_BOOKED);
-
-                    // CANCEL PENDING: există cerere de anulare în așteptare?
-                    // Dacă da → butonul "Anulează" rămâne disabled în UI
-                    boolean alreadyCancelPending = a != null
-                            && a.getStatus() == AttendanceStatus.PENDING
-                            && a.getNota() != null
-                            && a.getNota().startsWith(NOTA_CANCEL_PREFIX);
-
-                    // RECOVERY PENDING: există cerere de recuperare în așteptare?
-                    // Dacă da → butonul "Cere recuperare" rămâne disabled în UI
-                    boolean alreadyRecoveryPending = a != null
-                            && a.getStatus() == AttendanceStatus.PENDING
-                            && a.getNota() != null
-                            && a.getNota().startsWith(NOTA_RECOVERY_PREFIX);
-
-                    // Flag-urile finale:
-                    //   - alreadyProcessed blochează AMBELE butoane simultan
-                    //   - alreadyCancelPending   blochează doar butonul de anulare
-                    //   - alreadyRecoveryPending blochează doar butonul de recuperare
-                    boolean cancellable            = baseCondition && !alreadyProcessed && !alreadyCancelPending;
-                    boolean recoveryRequestAllowed = baseCondition && !alreadyProcessed && !alreadyRecoveryPending;
-
-                    // ── Date prezență ──────────────────────────────────────────
-                    AttendanceStatus childAttendanceStatus = (a != null ? a.getStatus()              : null);
-                    Integer assignedToSessionId            = (a != null ? a.getAssignedToSessionId() : null);
-                    boolean isRecoveryAttendance           = (a != null && a.isRecovery());
-
-                    return new SessionSummaryResponse(
-                            s.getIdSession(),
-                            s.getSessionDate(),
-                            s.getTime(),
-                            s.getSessionStatus(),
-                            schoolName,
-                            schoolAddress,
-                            cancellable,
-                            recoveryRequestAllowed,
-                            (childAttendanceStatus != null ? childAttendanceStatus.name() : null),
-                            assignedToSessionId,
-                            isRecoveryAttendance
-                    );
-                })
+                .filter(s -> isSessionVisible(s, filterFrom))
+                .map(s -> toSessionSummary(s, group, attendanceBySessionId, now))
                 .toList();
 
         return new ChildGroupScheduleResponse(
@@ -300,7 +229,7 @@ public class ParentServiceImpl implements ParentService {
         GroupClass group = session.getGroup();
         ChildGroup childGroup = childGroupRepository.findByChildAndGroup(child, group)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.CHILD_NOT_IN_GROUP, "Copilul nu este înscris în această grupă."));
+                        ErrorCode.CHILD_NOT_IN_GROUP, CHILD_NOT_IN_GROUP));
 
         if (Boolean.FALSE.equals(childGroup.getActive())) {
             throw new BusinessException(
@@ -394,7 +323,7 @@ public class ParentServiceImpl implements ParentService {
         GroupClass group = session.getGroup();
         ChildGroup childGroup = childGroupRepository.findByChildAndGroup(child, group)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.CHILD_NOT_IN_GROUP, "Copilul nu este înscris în această grupă."));
+                        ErrorCode.CHILD_NOT_IN_GROUP, CHILD_NOT_IN_GROUP));
 
         if (Boolean.FALSE.equals(childGroup.getActive())) {
             throw new BusinessException(
@@ -461,7 +390,7 @@ public class ParentServiceImpl implements ParentService {
         return new ParentSessionActionResponse(
                 child.getIdChild(),
                 session.getIdSession(),
-                "RECOVERY_REQUEST",
+                NOTA_RECOVERY_PREFIX,
                 "Cererea de recuperare a fost trimisă și este în așteptare (PENDING). "
                         + "Profesorul va aloca o sesiune de recuperare.");
     }
@@ -530,6 +459,108 @@ public class ParentServiceImpl implements ParentService {
         }
 
         return child;
+    }
+
+    /**
+     * Verifică dacă o sesiune este vizibilă părintelui.
+     * Sesiunile anterioare datei de confirmare a startului grupei sunt filtrate.
+     *
+     * @param s          sesiunea de verificat
+     * @param filterFrom data minimă de vizibilitate (null = toate sesiunile vizibile)
+     */
+    private boolean isSessionVisible(Session s, LocalDate filterFrom) {
+        if (filterFrom == null || s.getSessionDate() == null) return true;
+        return !s.getSessionDate().isBefore(filterFrom);
+    }
+
+    /**
+     * Construiește un SessionSummaryResponse pentru o sesiune, calculând:
+     *   - schoolName / schoolAddress: din sesiune, cu fallback pe grupă
+     *   - baseCondition: sesiune PLANNED și cel puțin 24h în viitor
+     *   - flag-uri de acțiune: cancellable, recoveryRequestAllowed
+     *   - date prezență: status, assignedToSessionId, isRecovery
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Extras din lambda-ul mare al stream().map() din getChildGroupSchedule().
+     *   Complexitatea ciclomatică e concentrată aici, dar metoda are o singură
+     *   responsabilitate clară: conversia Session → SessionSummaryResponse.
+     *
+     * Flag-uri de acțiune:
+     *   alreadyProcessed      → blochează AMBELE butoane (EXCUSED sau RECOVERY_BOOKED)
+     *   alreadyCancelPending  → blochează doar butonul "Anulează"
+     *   alreadyRecoveryPending → blochează doar butonul "Cere recuperare"
+     *
+     * @param s                    sesiunea de mapat
+     * @param group                grupa (pentru fallback school)
+     * @param attendanceBySessionId map preîncărcat attendance per sesiune (anti N+1)
+     * @param now                  timestamp curent (calculat o dată pentru toată lista)
+     */
+    private SessionSummaryResponse toSessionSummary(
+            Session s,
+            GroupClass group,
+            Map<Integer, Attendance> attendanceBySessionId,
+            LocalDateTime now) {
+
+        // Școala sesiunii — cu fallback pe școala grupei dacă sesiunea nu are setată școala
+        String schoolName    = s.getSchool() != null ? s.getSchool().getName()
+                : (group.getSchool() != null ? group.getSchool().getName()    : null);
+        String schoolAddress = s.getSchool() != null ? s.getSchool().getAddress()
+                : (group.getSchool() != null ? group.getSchool().getAddress() : null);
+
+        // Datetime-ul sesiunii pentru verificarea pragului de 24h
+        LocalDateTime sessionDateTime = null;
+        if (s.getSessionDate() != null) {
+            LocalTime startTime = (s.getTime() != null) ? s.getTime() : LocalTime.MIDNIGHT;
+            sessionDateTime = LocalDateTime.of(s.getSessionDate(), startTime);
+        }
+
+        boolean isPlanned        = s.getSessionStatus() == SessionStatus.PLANNED;
+        boolean atLeast24hBefore = sessionDateTime != null
+                && !sessionDateTime.isBefore(now.plusHours(24));
+
+        // Condiția de bază: sesiune PLANNED și cel puțin 24h distanță
+        boolean baseCondition = isPlanned && atLeast24hBefore;
+
+        Attendance a = attendanceBySessionId.get(s.getIdSession());
+
+        // PROCESATĂ: profesorul a confirmat deja O cerere (EXCUSED sau RECOVERY_BOOKED)
+        // → AMBELE butoane se dezactivează
+        boolean alreadyProcessed = a != null
+                && (a.getStatus() == AttendanceStatus.EXCUSED
+                ||  a.getStatus() == AttendanceStatus.RECOVERY_BOOKED);
+
+        // CANCEL PENDING: cerere de anulare în așteptare → butonul "Anulează" disabled
+        boolean alreadyCancelPending = a != null
+                && a.getStatus() == AttendanceStatus.PENDING
+                && a.getNota() != null
+                && a.getNota().startsWith(NOTA_CANCEL_PREFIX);
+
+        // RECOVERY PENDING: cerere de recuperare în așteptare → butonul "Cere recuperare" disabled
+        boolean alreadyRecoveryPending = a != null
+                && a.getStatus() == AttendanceStatus.PENDING
+                && a.getNota() != null
+                && a.getNota().startsWith(NOTA_RECOVERY_PREFIX);
+
+        boolean cancellable            = baseCondition && !alreadyProcessed && !alreadyCancelPending;
+        boolean recoveryRequestAllowed = baseCondition && !alreadyProcessed && !alreadyRecoveryPending;
+
+        AttendanceStatus childAttendanceStatus = (a != null ? a.getStatus()              : null);
+        Integer assignedToSessionId            = (a != null ? a.getAssignedToSessionId() : null);
+        boolean isRecoveryAttendance           = (a != null && a.isRecovery());
+
+        return new SessionSummaryResponse(
+                s.getIdSession(),
+                s.getSessionDate(),
+                s.getTime(),
+                s.getSessionStatus(),
+                schoolName,
+                schoolAddress,
+                cancellable,
+                recoveryRequestAllowed,
+                (childAttendanceStatus != null ? childAttendanceStatus.name() : null),
+                assignedToSessionId,
+                isRecoveryAttendance
+        );
     }
 
     /**

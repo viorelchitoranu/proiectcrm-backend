@@ -7,7 +7,9 @@ import com.springapp.proiectcrm.model.*;
 import com.springapp.proiectcrm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Service;
@@ -73,6 +75,12 @@ public class MessageBoardServiceImpl implements MessageBoardService {
     private final FileStorageService         fileStorageService;
     private final SimpMessageSendingOperations messagingTemplate;
 
+    // Self-injection — necesar pentru ca apelurile între metode @Transactional
+// să treacă prin proxy-ul Spring (altfel readOnly=true pe getFeed() e ignorat)
+    @Autowired
+    @Lazy
+    private MessageBoardService self;
+
     // URL de bază pentru accesul la fișiere din browser
     @Value("${upload.url-prefix:/uploads}")
     private String uploadUrlPrefix;
@@ -83,6 +91,10 @@ public class MessageBoardServiceImpl implements MessageBoardService {
 
     private static final int DEFAULT_HISTORY_LIMIT = 50;
     private static final int MAX_HISTORY_LIMIT     = 200;
+
+    // Prefix topic WebSocket — folosit în 5 locuri pentru broadcast
+// Exemplu: /topic/board/GENERAL, /topic/board/GROUP_1/comments
+    private static final String TOPIC_BOARD_PREFIX = "/topic/board/";
 
     // ── Publicare post ────────────────────────────────────────────────────────
 
@@ -102,8 +114,8 @@ public class MessageBoardServiceImpl implements MessageBoardService {
 
         // Construim PostCardDto complet (fără comentarii și fără reacții — post nou)
         PostCardDto card = toCardDto(saved, author, Collections.emptyList(),
-                buildEmptyReactions(), null);
-        messagingTemplate.convertAndSend("/topic/board/" + channel, card);
+                buildEmptyReactions());
+        broadcastPost(channel, card);
 
         log.info("BOARD_POST channel={} authorId={}", channel, author.getIdUser());
         return toDto(saved, author);
@@ -121,7 +133,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
     public List<PostCardDto> getFeed(String channel, int limit, Principal principal) {
         User user = requireUserByEmail(principal.getName());
         String normalizedChannel = channel.trim().toUpperCase();
-        int safeLimit = Math.max(1, Math.min(limit, MAX_HISTORY_LIMIT));
+        int safeLimit = Math.min(limit <= 0 ? DEFAULT_HISTORY_LIMIT : limit, MAX_HISTORY_LIMIT);
 
         checkReadPermission(normalizedChannel, user);
 
@@ -129,10 +141,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
                 normalizedChannel, PageRequest.of(0, safeLimit));
 
         // Re-sortăm ASC (oldest first) pentru afișare corectă în feed
-        List<Post> sorted = new ArrayList<>(posts);
-        Collections.reverse(sorted);
-
-        return sorted.stream()
+        return posts.reversed().stream()
                 .map(p -> buildFullCard(p, user))
                 .toList();
     }
@@ -164,8 +173,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
 
         // Broadcast comentariu nou pe topicul dedicat comentariilor
         // Frontend adaugă comentariul la cardul cu postId corespunzător
-        Map<String, Object> payload = Map.of("postId", postId, "comment", dto);
-        messagingTemplate.convertAndSend("/topic/board/" + post.getChannel() + "/comments", (Object) payload);
+        broadcastComment(post.getChannel(), postId, dto);
 
         log.info("BOARD_COMMENT postId={} authorId={}", postId, author.getIdUser());
         return dto;
@@ -218,9 +226,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
         ReactionSummaryDto summary = buildReactionSummary(post, user);
 
         // Broadcast sumar actualizat
-        Map<String, Object> payload = Map.of("postId", postId, "reactions", summary);
-        messagingTemplate.convertAndSend(
-                "/topic/board/" + post.getChannel() + "/reactions", (Object) payload);
+        broadcastReactions(post.getChannel(), postId, summary);
 
         return summary;
     }
@@ -245,7 +251,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
         PostCardDto card = buildFullCard(post, admin);
 
         // Broadcast post actualizat — frontend înlocuiește cardul existent
-        messagingTemplate.convertAndSend("/topic/board/" + post.getChannel(), card);
+        broadcastPost(post.getChannel(), card);
 
         log.info("BOARD_EDIT postId={} adminId={}", postId, admin.getIdUser());
         return card;
@@ -278,7 +284,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
         postRepository.save(post);
 
         PostCardDto card = buildFullCard(post, admin);
-        messagingTemplate.convertAndSend("/topic/board/" + post.getChannel(), card);
+        broadcastPost(post.getChannel(), card);
 
         log.info("BOARD_ATTACH postId={} path={} type={}", postId, relativePath, attachmentType);
         return card;
@@ -310,7 +316,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
     @Transactional(readOnly = true)
     public List<PostOutDto> getHistory(String channel, int limit, Principal principal) {
         // Delegăm la getFeed și convertim — pentru backward compatibility
-        return getFeed(channel, limit, principal).stream()
+        return self.getFeed(channel, limit, principal).stream()
                 .map(card -> new PostOutDto(
                         card.getId(), card.getChannel(),
                         card.getAuthorId(), card.getAuthorName(), card.getAuthorRole(),
@@ -342,7 +348,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
                 .map(c -> toCommentDto(c, c.getAuthor()))
                 .toList();
 
-        return toCardDto(post, post.getAuthor(), commentDtos, reactions, currentUser);
+        return toCardDto(post, post.getAuthor(), commentDtos, reactions);
     }
 
     /**
@@ -377,8 +383,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
 
     private PostCardDto toCardDto(Post post, User author,
                                   List<CommentDto> comments,
-                                  ReactionSummaryDto reactions,
-                                  User currentUser) {
+                                  ReactionSummaryDto reactions) {
         String attachmentUrl = post.getAttachmentPath() != null
                 ? uploadUrlPrefix + "/" + post.getAttachmentPath()
                 : null;
@@ -437,7 +442,7 @@ public class MessageBoardServiceImpl implements MessageBoardService {
             }
             default -> {
                 if (channel.startsWith(CHANNEL_GROUP_PREFIX)) {
-                    checkGroupMembership(channel, user, true);
+                    checkGroupMembership(channel, user);
                 } else {
                     throw new BusinessException(ErrorCode.BUSINESS_RULE_VIOLATION,
                             "Canal invalid: " + channel);
@@ -449,14 +454,14 @@ public class MessageBoardServiceImpl implements MessageBoardService {
     private void checkReadPermission(String channel, User user) {
         if (channel.equals(CHANNEL_GENERAL) || channel.equals(CHANNEL_ANNOUNCEMENTS)) return;
         if (channel.startsWith(CHANNEL_GROUP_PREFIX)) {
-            checkGroupMembership(channel, user, false);
+            checkGroupMembership(channel, user);
         } else {
             throw new BusinessException(ErrorCode.BUSINESS_RULE_VIOLATION,
                     "Canal invalid: " + channel);
         }
     }
 
-    private void checkGroupMembership(String channel, User user, boolean forWrite) {
+    private void checkGroupMembership(String channel, User user) {
         int groupId;
         try {
             groupId = Integer.parseInt(channel.substring(CHANNEL_GROUP_PREFIX.length()));
@@ -503,5 +508,38 @@ public class MessageBoardServiceImpl implements MessageBoardService {
     private String roleName(User user) {
         if (user.getRole() == null || user.getRole().getRoleName() == null) return "";
         return user.getRole().getRoleName().toUpperCase();
+    }
+
+    /**
+     * Trimite un post nou sau actualizat pe canalul său WebSocket.
+     * Topic: /topic/board/{channel}
+     * Frontend înlocuiește sau adaugă cardul corespunzător.
+     */
+    private void broadcastPost(String channel, PostCardDto card) {
+        messagingTemplate.convertAndSend(TOPIC_BOARD_PREFIX + channel, card);
+    }
+
+    /**
+     * Trimite un comentariu nou pe topicul dedicat al canalului.
+     * Topic: /topic/board/{channel}/comments
+     * Payload: { postId, comment: CommentDto }
+     * Frontend adaugă comentariul la cardul cu postId corespunzător.
+     */
+    private void broadcastComment(String channel, Long postId, CommentDto dto) {
+        Map<String, Object> payload = Map.of("postId", postId, "comment", dto);
+        messagingTemplate.convertAndSend(
+                TOPIC_BOARD_PREFIX + channel + "/comments", (Object) payload);
+    }
+
+    /**
+     * Trimite sumarul actualizat de reacții pe topicul dedicat al canalului.
+     * Topic: /topic/board/{channel}/reactions
+     * Payload: { postId, reactions: ReactionSummaryDto }
+     * Frontend actualizează reacțiile cardului cu postId corespunzător.
+     */
+    private void broadcastReactions(String channel, Long postId, ReactionSummaryDto summary) {
+        Map<String, Object> payload = Map.of("postId", postId, "reactions", summary);
+        messagingTemplate.convertAndSend(
+                TOPIC_BOARD_PREFIX + channel + "/reactions", (Object) payload);
     }
 }

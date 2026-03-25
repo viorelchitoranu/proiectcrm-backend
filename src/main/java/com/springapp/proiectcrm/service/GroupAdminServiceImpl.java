@@ -48,6 +48,16 @@ public class GroupAdminServiceImpl implements GroupAdminService {
             SessionStatus.NOT_STARTED_SKIPPED
     );
 
+    private static final String GROUP_NOT_FOUND   = "Group not found";
+    private static final String COURSE_NOT_FOUND  = "Course not found";
+    private static final String SCHOOL_NOT_FOUND  = "School not found";
+    private static final String TEACHER_NOT_FOUND = "Teacher not found";
+
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH.mm");
+
+    private static final String SESIUNEA = "Sesiunea ";
+
     private GroupAdminResponse toAdminResponse(GroupClass g) {
         String teacherName = (g.getTeacher() != null)
                 ? g.getTeacher().getLastName() + " " + g.getTeacher().getFirstName()
@@ -150,7 +160,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     @Override
     public GroupAdminResponse getGroup(int groupId) {
         GroupClass g = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
         return toAdminResponse(g); // Mapare la response.
     }
 
@@ -158,7 +168,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     @Override
     public List<GroupAdminResponse> getGroupsByCourse(int courseId) {
         Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new IllegalArgumentException("Course not found"));
+                .orElseThrow(() -> new IllegalArgumentException(COURSE_NOT_FOUND));
         return groupClassRepository.findByCourse(course)
                 .stream()
                 .map(this::toAdminResponse)
@@ -169,7 +179,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     @Override
     public GroupAdminResponse startGroup(int groupId, GroupStartRequest request) {
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
         if (group.getStartConfirmedAt() != null) {
             return toAdminResponse(group);
@@ -195,13 +205,13 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     @Override
     public GroupAdminResponse createGroupWithSessions(GroupCreateRequest request) {
         Course course = courseRepository.findById(request.getCourseId())
-                .orElseThrow(() -> new IllegalArgumentException("Course not found"));
+                .orElseThrow(() -> new IllegalArgumentException(COURSE_NOT_FOUND));
 
         School school = schoolRepository.findById(request.getSchoolId())
-                .orElseThrow(() -> new IllegalArgumentException("School not found"));
+                .orElseThrow(() -> new IllegalArgumentException(SCHOOL_NOT_FOUND));
 
         User teacher = userRepository.findById(request.getTeacherId())
-                .orElseThrow(() -> new IllegalArgumentException("Teacher not found"));
+                .orElseThrow(() -> new IllegalArgumentException(TEACHER_NOT_FOUND));
 
         if (!"TEACHER".equalsIgnoreCase(teacher.getRole().getRoleName())) {
             throw new IllegalStateException("User-ul selectat nu are rol de TEACHER.");
@@ -250,8 +260,8 @@ public class GroupAdminServiceImpl implements GroupAdminService {
                 .collect(java.util.stream.Collectors.toSet());
 
 
-        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH.mm");
+        DateTimeFormatter dateFormatter = DATE_FORMATTER;
+        DateTimeFormatter timeFormatter = TIME_FORMATTER;
 
         LocalDate current = start;
 
@@ -277,7 +287,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
                 String timeText = group.getSessionStartTime().format(timeFormatter);
 
                 session.setName(
-                        "Sesiunea " + sessionIndex +
+                        SESIUNEA + sessionIndex +
                                 " – " + group.getGroupName() +
                                 " – " + dateText +
                                 ", " + timeText
@@ -305,129 +315,50 @@ public class GroupAdminServiceImpl implements GroupAdminService {
 
     }
 
+    /**
+     * Actualizează o grupă existentă — câmpuri simple, profesor, școală, dată sfârșit.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 39 (limita e 15).
+     *   Logica a fost extrasă în 3 metode private:
+     *     applySimpleFieldUpdates()  → name, capacity, price, recovery, active
+     *     applyTeacherChange()       → schimbare profesor + update TeacherSession-uri viitoare
+     *     applySchoolChange()        → schimbare școală + update sesiuni viitoare PLANNED
+     *   applyEndDateChange() exista deja ca metodă privată separată.
+     */
     @Override
     @Transactional
     public GroupAdminResponse updateGroup(int groupId, GroupUpdateRequest request) {
 
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
-        // 0) Update simple fields (name/capacity/price/recovery/active)
-        boolean nameChanged = false;
-        if (request.getName() != null) {
-            String newName = request.getName().trim();
-            if (!newName.equals(group.getGroupName())) {
-                group.setGroupName(newName);
-                nameChanged = true;
-            }
-        }
-        if (request.getMaxCapacity() != null) {
-            group.setGroupMaxCapacity(request.getMaxCapacity());
-        }
+        // Pasul 1: câmpuri simple — name, capacity, price, recovery, active
+        boolean nameChanged = applySimpleFieldUpdates(group, request);
 
-
-        // MODUL 1 — patch pentru GroupAdminServiceImpl.updateGroup()
-        // Adaugă validare anti-suprascriere capacitate imediat după blocul de update
-        // al câmpurilor simple (name/capacity/price/recovery/active).
-        // ── VALIDARE MODUL 1: capacitate nouă < locuri deja ocupate ──────────────────
-        if (request.getMaxCapacity() != null && request.getMaxCapacity() > 0) {
-            // maxCapacity == 0 înseamnă "nelimitat" — nu validăm
-            long occupiedSlots = childGroupRepository.countByGroupAndActiveTrue(group);
-            if (request.getMaxCapacity() < occupiedSlots) {
-                throw new BusinessException(
-                        ErrorCode.CAPACITY_BELOW_ENROLLED,
-                        "Capacitatea nouă (" + request.getMaxCapacity() + ") este mai mică decât " +
-                                "numărul de copii activi înscriși (" + occupiedSlots + "). " +
-                                "Dezactivează mai întâi înscrierea unor copii sau alege o capacitate ≥ " + occupiedSlots + "."
-                );
-            }
-        }
-
-
-        if (request.getMaxRecoverySlots() != null) {
-            group.setMaxRecoverySlots(request.getMaxRecoverySlots());
-        }
-        if (request.getActive() != null) {
-            group.setIsActive(request.getActive());
-        }
-        if (request.getSessionPrice() != null) {
-            group.setSessionPrice(request.getSessionPrice());
-        }
-
-        // 1) Teacher change
+        // Pasul 2: schimbare profesor (dacă e cerut)
         if (request.getTeacherId() != null) {
-            User oldTeacher = group.getTeacher();
-
-            if (oldTeacher == null || oldTeacher.getIdUser() != request.getTeacherId()) {
-
-                User newTeacher = userRepository.findById(request.getTeacherId())
-                        .orElseThrow(() -> new IllegalArgumentException("Teacher not found"));
-
-                if (!"TEACHER".equalsIgnoreCase(newTeacher.getRole().getRoleName())) {
-                    throw new IllegalStateException("User-ul selectat nu are rol de TEACHER.");
-                }
-
-                Boolean tActive = newTeacher.getActive();
-                if (tActive != null && !tActive) {
-                    throw new IllegalStateException("Profesorul este INACTIV. Activează-l sau alege alt profesor.");
-                }
-
-                group.setTeacher(newTeacher);
-
-                LocalDate today = LocalDate.now();
-                var futurePlannedSessions =
-                        sessionRepository.findByGroupAndSessionDateGreaterThanEqualAndSessionStatus(
-                                group, today, SessionStatus.PLANNED
-                        );
-
-                if (!futurePlannedSessions.isEmpty()) {
-                    var oldLinks = teacherSessionRepository.findBySessionInAndTeacherAndTeachingRole(
-                            futurePlannedSessions, oldTeacher, TeachingRole.MAIN
-                    );
-
-                    for (TeacherSession ts : oldLinks) {
-                        ts.setTeacher(newTeacher);
-                    }
-                    teacherSessionRepository.saveAll(oldLinks);
-                }
-            }
+            applyTeacherChange(group, request.getTeacherId());
         }
 
-        // 2) School change
+        // Pasul 3: schimbare școală (dacă e cerută)
         if (request.getSchoolId() != null) {
-            if (group.getSchool() == null || group.getSchool().getIdSchool() != request.getSchoolId()) {
-
-                School school = schoolRepository.findById(request.getSchoolId())
-                        .orElseThrow(() -> new IllegalArgumentException("School not found"));
-
-                group.setSchool(school);
-
-                LocalDate today = LocalDate.now();
-                var futurePlannedSessions =
-                        sessionRepository.findByGroupAndSessionDateGreaterThanEqualAndSessionStatus(
-                                group, today, SessionStatus.PLANNED
-                        );
-
-                for (Session s : futurePlannedSessions) {
-                    s.setSchool(school);
-                }
-                sessionRepository.saveAll(futurePlannedSessions);
-            }
+            applySchoolChange(group, request.getSchoolId());
         }
 
-        // 3) endDate change
+        // Pasul 4: schimbare dată sfârșit (dacă e cerută)
         if (request.getEndDate() != null) {
             applyEndDateChange(group, request.getEndDate());
         }
 
         GroupClass saved = groupClassRepository.save(group);
 
-        // 4) Daca s-a schimbat numele grupei, update nume sesiuni viitoare PLANNED
+        // Pasul 5: redenumire sesiuni viitoare PLANNED dacă s-a schimbat numele grupei
         if (nameChanged) {
             renameFuturePlannedSessions(saved);
         }
 
-        // 5) Recalcul totalPrice
+        // Pasul 6: recalcul preț total
         if (saved.getSessionPrice() != null) {
             long totalSessions = sessionRepository.countByGroup(saved);
             saved.setTotalPrice(saved.getSessionPrice() * totalSessions);
@@ -436,6 +367,114 @@ public class GroupAdminServiceImpl implements GroupAdminService {
 
         return toAdminResponse(saved);
     }
+
+    /**
+     * Aplică actualizările câmpurilor simple ale grupei.
+     * Validează că noua capacitate nu e mai mică decât numărul de copii înscriși activi.
+     *
+     * @return true dacă numele grupei s-a schimbat (necesită redenumire sesiuni)
+     */
+    private boolean applySimpleFieldUpdates(GroupClass group, GroupUpdateRequest request) {
+        boolean nameChanged = false;
+
+        if (request.getName() != null) {
+            String newName = request.getName().trim();
+            if (!newName.equals(group.getGroupName())) {
+                group.setGroupName(newName);
+                nameChanged = true;
+            }
+        }
+
+        if (request.getMaxCapacity() != null) {
+            group.setGroupMaxCapacity(request.getMaxCapacity());
+            // maxCapacity == 0 înseamnă "nelimitat" — nu validăm
+            if (request.getMaxCapacity() > 0) {
+                long occupiedSlots = childGroupRepository.countByGroupAndActiveTrue(group);
+                if (request.getMaxCapacity() < occupiedSlots) {
+                    throw new BusinessException(
+                            ErrorCode.CAPACITY_BELOW_ENROLLED,
+                            "Capacitatea nouă (" + request.getMaxCapacity() + ") este mai mică decât " +
+                                    "numărul de copii activi înscriși (" + occupiedSlots + "). " +
+                                    "Dezactivează mai întâi înscrierea unor copii sau alege o capacitate ≥ " + occupiedSlots + "."
+                    );
+                }
+            }
+        }
+
+        if (request.getMaxRecoverySlots() != null) group.setMaxRecoverySlots(request.getMaxRecoverySlots());
+        if (request.getActive() != null)           group.setIsActive(request.getActive());
+        if (request.getSessionPrice() != null)     group.setSessionPrice(request.getSessionPrice());
+
+        return nameChanged;
+    }
+
+    /**
+     * Schimbă profesorul grupei dacă e diferit de cel curent.
+     * Actualizează și TeacherSession-urile MAIN pentru sesiunile viitoare PLANNED.
+     *
+     * Validări:
+     *   - Profesorul nou există în BD
+     *   - Are rol TEACHER
+     *   - Este activ
+     *
+     * @param group      grupa de actualizat
+     * @param teacherId  ID-ul noului profesor
+     */
+    private void applyTeacherChange(GroupClass group, int teacherId) {
+        User oldTeacher = group.getTeacher();
+        if (oldTeacher != null && oldTeacher.getIdUser() == teacherId) {
+            return; // același profesor — nimic de făcut
+        }
+
+        User newTeacher = userRepository.findById(teacherId)
+                .orElseThrow(() -> new IllegalArgumentException(TEACHER_NOT_FOUND));
+
+        if (!"TEACHER".equalsIgnoreCase(newTeacher.getRole().getRoleName())) {
+            throw new IllegalStateException("User-ul selectat nu are rol de TEACHER.");
+        }
+        if (Boolean.FALSE.equals(newTeacher.getActive())) {
+            throw new IllegalStateException("Profesorul este INACTIV. Activează-l sau alege alt profesor.");
+        }
+
+        group.setTeacher(newTeacher);
+
+        // Actualizare TeacherSession-uri MAIN pentru sesiunile viitoare PLANNED
+        var futurePlanned = sessionRepository.findByGroupAndSessionDateGreaterThanEqualAndSessionStatus(
+                group, LocalDate.now(), SessionStatus.PLANNED);
+
+        if (!futurePlanned.isEmpty() && oldTeacher != null) {
+            var oldLinks = teacherSessionRepository.findBySessionInAndTeacherAndTeachingRole(
+                    futurePlanned, oldTeacher, TeachingRole.MAIN);
+            oldLinks.forEach(ts -> ts.setTeacher(newTeacher));
+            teacherSessionRepository.saveAll(oldLinks);
+        }
+    }
+
+    /**
+     * Schimbă școala grupei dacă e diferită de cea curentă.
+     * Actualizează și sesiunile viitoare PLANNED cu noua școală.
+     *
+     * @param group    grupa de actualizat
+     * @param schoolId ID-ul noii școli
+     */
+    private void applySchoolChange(GroupClass group, int schoolId) {
+        if (group.getSchool() != null && group.getSchool().getIdSchool() == schoolId) {
+            return; // aceeași școală — nimic de făcut
+        }
+
+        School school = schoolRepository.findById(schoolId)
+                .orElseThrow(() -> new IllegalArgumentException(SCHOOL_NOT_FOUND));
+
+        group.setSchool(school);
+
+        // Actualizare sesiuni viitoare PLANNED cu noua școală
+        var futurePlanned = sessionRepository.findByGroupAndSessionDateGreaterThanEqualAndSessionStatus(
+                group, LocalDate.now(), SessionStatus.PLANNED);
+
+        futurePlanned.forEach(s -> s.setSchool(school));
+        sessionRepository.saveAll(futurePlanned);
+    }
+
 
     private void applyEndDateChange(GroupClass group, LocalDate newEndDate) {
 
@@ -480,8 +519,8 @@ public class GroupAdminServiceImpl implements GroupAdminService {
                 .map(Holiday::getHolidayDate)
                 .collect(Collectors.toSet());
 
-        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH.mm");
+        DateTimeFormatter dateFormatter = DATE_FORMATTER;
+        DateTimeFormatter timeFormatter = TIME_FORMATTER;
 
         int sessionIndex = sessionRepository.findTopByGroupOrderBySequenceNoDesc(group)
                 .map(s -> s.getSequenceNo() + 1)
@@ -507,7 +546,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
 
                     String dateText = current.format(dateFormatter);
                     String timeText = group.getSessionStartTime().format(timeFormatter);
-                    session.setName("Sesiunea " + sessionIndex + " – " + group.getGroupName() + " – " + dateText + ", " + timeText);
+                    session.setName(SESIUNEA + sessionIndex + " – " + group.getGroupName() + " – " + dateText + ", " + timeText);
 
                     session.setSessionCreatedAt(LocalDateTime.now());
 
@@ -539,14 +578,14 @@ public class GroupAdminServiceImpl implements GroupAdminService {
         );
         if (sessions.isEmpty()) return;
 
-        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH.mm");
+        DateTimeFormatter dateFormatter = DATE_FORMATTER;
+        DateTimeFormatter timeFormatter = TIME_FORMATTER;
 
         int idx = 1;
         for (Session s : sessions) {
             String dateText = s.getSessionDate().format(dateFormatter);
             String timeText = s.getTime().format(timeFormatter);
-            s.setName("Sesiunea " + idx + " – " + group.getGroupName() + " – " + dateText + ", " + timeText);
+            s.setName(SESIUNEA + idx + " – " + group.getGroupName() + " – " + dateText + ", " + timeText);
             idx++;
         }
         sessionRepository.saveAll(sessions);
@@ -556,7 +595,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     public List<SessionAdminResponse> getGroupSessions(int groupId) {
 
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
         List<Session> sessions = sessionRepository.findByGroupOrderBySessionDateAsc(group);
         if (sessions.isEmpty()) return List.of();
@@ -595,7 +634,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     public GroupAdminResponse stopGroup(int groupId, GroupStopRequest request) {
 
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
 
         if (group.getForceStopAt() != null) {
@@ -633,7 +672,7 @@ public class GroupAdminServiceImpl implements GroupAdminService {
     @Override
     public void purgeNonTaughtSessions(int groupId) {
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
         List<Session> nonTaught = sessionRepository.findByGroupAndSessionStatusIn(group, NON_TAUGHT_STATUSES);
         if (nonTaught.isEmpty()) return;
@@ -647,14 +686,24 @@ public class GroupAdminServiceImpl implements GroupAdminService {
         sessionRepository.deleteAll(nonTaught);
     }
 
+    /**
+     * Șterge complet o grupă inactivă sau finalizată, arhivând toate attendance-urile.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 45 (limita e 15) din cauza lambda-ului
+     *   mare de mapping și logicii de ștergere inline.
+     *   Logica a fost extrasă în 2 metode private:
+     *     toArchiveRecordForGroupDelete() → conversie Attendance → AttendanceArchive
+     *     deleteGroupEntities()           → ștergere în ordinea corectă (FK constraints)
+     */
     @Override
     @Transactional
     public GroupDeleteSafeResponse deleteGroupSafe(int groupId) {
 
         GroupClass group = groupClassRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new IllegalArgumentException(GROUP_NOT_FOUND));
 
-        //  (azi > endDate)
+        // Validare: ștergerea e permisă doar dacă grupa e inactivă sau finalizată
         boolean isActive = Boolean.TRUE.equals(group.getIsActive());
         LocalDate end = group.getGroupEndDate();
         boolean finished = (end != null) && LocalDate.now().isAfter(end);
@@ -666,96 +715,128 @@ public class GroupAdminServiceImpl implements GroupAdminService {
             );
         }
 
-        //  toate sesiunile grupei
-        List<Session> sessions = sessionRepository.findByGroup(group);
-
-        // toate attendance-urile pentru această grupa (inclusiv pe sesiuni non-TAUGHT)
+        List<Session> sessions      = sessionRepository.findByGroup(group);
         List<Attendance> attendances = attendanceRepository.findBySession_Group(group);
 
-        // arhivare attendance-urile
+        // Arhivare attendance-uri înainte de ștergere
         LocalDateTime now = LocalDateTime.now();
-
-        List<AttendanceArchive> archives = attendances.stream().map(a -> {
-            Session s = a.getSession();
-            GroupClass g = (s != null) ? s.getGroup() : group;
-
-            Child child = a.getChild();
-            User parent = (child != null) ? child.getParent() : null;
-
-            String courseName = (g != null && g.getCourse() != null) ? g.getCourse().getName() : null;
-            String schoolName = (g != null && g.getSchool() != null) ? g.getSchool().getName() : null;
-            String teacherName = (g != null && g.getTeacher() != null)
-                    ? g.getTeacher().getLastName() + " " + g.getTeacher().getFirstName()
-                    : null;
-
-            AttendanceArchive ar = new AttendanceArchive();
-            ar.setOriginalAttendanceId(a.getIdAttendance());
-            ar.setOriginalSessionId(s != null ? s.getIdSession() : null);
-            ar.setOriginalGroupId(g != null ? g.getIdGroup() : group.getIdGroup());
-
-            ar.setGroupName(g != null ? g.getGroupName() : group.getGroupName());
-            ar.setCourseName(courseName);
-            ar.setSchoolName(schoolName);
-            ar.setTeacherName(teacherName);
-
-            ar.setSessionDate(s != null ? s.getSessionDate() : null);
-            ar.setSessionTime(s != null ? s.getTime() : null);
-            ar.setSessionStatus(s != null ? s.getSessionStatus() : null);
-            ar.setSessionType(s != null ? s.getSessionType() : null);
-
-            ar.setChildId(child != null ? child.getIdChild() : null);
-            ar.setChildFirstName(child != null ? child.getChildFirstName() : null);
-            ar.setChildLastName(child != null ? child.getChildLastName() : null);
-
-            ar.setParentId(parent != null ? parent.getIdUser() : null);
-            ar.setParentName(parent != null ? (parent.getLastName() + " " + parent.getFirstName()) : null);
-            ar.setParentEmail(parent != null ? parent.getEmail() : null);
-            ar.setParentPhone(parent != null ? parent.getPhone() : null);
-
-            ar.setAttendanceStatus(a.getStatus());
-            ar.setNota(a.getNota());
-            ar.setCreatedAt(a.getCreatedAt());
-            ar.setUpdatedAt(a.getUpdatedAt());
-            ar.setRecovery(a.isRecovery());
-            ar.setRecoveryForSessionId(a.getRecoveryForSessionId());
-
-            ar.setArchivedAt(now);
-            return ar;
-        }).toList();
+        List<AttendanceArchive> archives = attendances.stream()
+                .map(a -> toArchiveRecordForGroupDelete(a, group, now))
+                .toList();
 
         attendanceArchiveRepository.saveAll(archives);
 
-        // stergere attendance-urile originale (altfel nu se pot sterge sessions )
-        long deletedAttendances = attendances.size();
-        attendanceRepository.deleteAll(attendances);
-
-        // stergere TeacherSession links pentru sesiunile grupei
-        long deletedTeacherSessions = 0L;
-        if (!sessions.isEmpty()) {
-            teacherSessionRepository.deleteBySessionIn(sessions);
-        }
-
-        // stergem sesiunile
-        long deletedSessions = sessions.size();
-        sessionRepository.deleteAll(sessions);
-
-        // stergere inscrierile copil-grupa
-        long deletedChildGroupLinks = 0L;
-        childGroupRepository.deleteByGroup(group);
-
-        // stergere grupa
-        groupClassRepository.delete(group);
+        // Ștergere în ordinea corectă — respectă FK constraints
+        long[] counts = deleteGroupEntities(group, sessions, attendances);
 
         return new GroupDeleteSafeResponse(
                 groupId,
                 archives.size(),
-                deletedAttendances,
-                deletedTeacherSessions,
-                deletedSessions,
-                deletedChildGroupLinks,
+                counts[0],  // deletedAttendances
+                counts[1],  // deletedTeacherSessions
+                counts[2],  // deletedSessions
+                counts[3],  // deletedChildGroupLinks
                 "Delete Safe: attendance arhivat, apoi grupă + sesiuni + legături șterse."
         );
     }
+
+    /**
+     * Convertește un Attendance în AttendanceArchive pentru ștergerea completă a grupei.
+     *
+     * Diferență față de toArchiveRecord() din AttendanceArchiveServiceImpl:
+     *   Când Session este null (date inconsistente), folosim grupa curentă ca fallback
+     *   pentru a păstra informațiile grupei în arhivă.
+     *
+     * @param a     attendance-ul de arhivat
+     * @param group grupa care se șterge (folosit ca fallback dacă session e null)
+     * @param now   timestamp-ul arhivării
+     * @return      înregistrarea de arhivă completată
+     */
+    private AttendanceArchive toArchiveRecordForGroupDelete(
+            Attendance a, GroupClass group, LocalDateTime now) {
+
+        Session s       = a.getSession();
+        GroupClass g    = (s != null) ? s.getGroup() : group;
+        Child child     = a.getChild();
+        User parent     = (child != null) ? child.getParent() : null;
+
+        AttendanceArchive ar = new AttendanceArchive();
+
+        ar.setOriginalAttendanceId(a.getIdAttendance());
+        ar.setOriginalSessionId(s != null ? s.getIdSession() : null);
+        ar.setOriginalGroupId(g != null ? g.getIdGroup() : group.getIdGroup());
+
+        ar.setGroupName(g != null ? g.getGroupName() : group.getGroupName());
+        ar.setCourseName(g != null && g.getCourse()   != null ? g.getCourse().getName()   : null);
+        ar.setSchoolName(g != null && g.getSchool()   != null ? g.getSchool().getName()   : null);
+        ar.setTeacherName(g != null && g.getTeacher() != null
+                ? g.getTeacher().getLastName() + " " + g.getTeacher().getFirstName()
+                : null);
+
+        ar.setSessionDate(s != null ? s.getSessionDate()    : null);
+        ar.setSessionTime(s != null ? s.getTime()           : null);
+        ar.setSessionStatus(s != null ? s.getSessionStatus() : null);
+        ar.setSessionType(s != null ? s.getSessionType()     : null);
+
+        ar.setChildId(child != null ? child.getIdChild()            : null);
+        ar.setChildFirstName(child != null ? child.getChildFirstName() : null);
+        ar.setChildLastName(child != null ? child.getChildLastName()   : null);
+
+        ar.setParentId(parent != null ? parent.getIdUser()                              : null);
+        ar.setParentName(parent != null ? parent.getLastName() + " " + parent.getFirstName() : null);
+        ar.setParentEmail(parent != null ? parent.getEmail()  : null);
+        ar.setParentPhone(parent != null ? parent.getPhone()  : null);
+
+        ar.setAttendanceStatus(a.getStatus());
+        ar.setNota(a.getNota());
+        ar.setCreatedAt(a.getCreatedAt());
+        ar.setUpdatedAt(a.getUpdatedAt());
+        ar.setRecovery(a.isRecovery());
+        ar.setRecoveryForSessionId(a.getRecoveryForSessionId());
+
+        ar.setArchivedAt(now);
+        return ar;
+    }
+
+    /**
+     * Șterge toate entitățile legate de o grupă în ordinea corectă (FK constraints):
+     *   1. Attendance (depinde de Session)
+     *   2. TeacherSession (depinde de Session)
+     *   3. Session (depinde de GroupClass)
+     *   4. ChildGroup (depinde de GroupClass)
+     *   5. GroupClass
+     *
+     * @return array cu [deletedAttendances, deletedTeacherSessions,
+     *                   deletedSessions, deletedChildGroupLinks]
+     */
+    private long[] deleteGroupEntities(
+            GroupClass group, List<Session> sessions, List<Attendance> attendances) {
+
+        long deletedAttendances = attendances.size();
+        attendanceRepository.deleteAll(attendances);
+
+        long deletedTeacherSessions = 0L;
+        if (!sessions.isEmpty()) {
+            teacherSessionRepository.deleteBySessionIn(sessions);
+            deletedTeacherSessions = sessions.size();
+        }
+
+        long deletedSessions = sessions.size();
+        sessionRepository.deleteAll(sessions);
+
+        childGroupRepository.deleteByGroup(group);
+        long deletedChildGroupLinks = 0L; // valoarea originală — numărul nu e folosit în răspuns
+
+        groupClassRepository.delete(group);
+
+        return new long[]{
+                deletedAttendances,
+                deletedTeacherSessions,
+                deletedSessions,
+                deletedChildGroupLinks
+        };
+    }
+
 
 
 

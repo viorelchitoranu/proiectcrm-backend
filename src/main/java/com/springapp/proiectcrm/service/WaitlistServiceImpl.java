@@ -8,7 +8,6 @@ import com.springapp.proiectcrm.model.*;
 import com.springapp.proiectcrm.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,8 +59,14 @@ public class WaitlistServiceImpl implements WaitlistService {
     private final GroupClassRepository  groupClassRepository;
     private final PasswordEncoder       passwordEncoder;
     private final EmailService          emailService;
+    // OBLIGATORIU: metodele @Async trebuie apelate prin bean injectat, nu via "this"
+    // Dacă le apelam via this.sendAllocationEmailAsync(), proxy-ul Spring era ocolit
+    // și @Async era ignorat — metoda rula sincron în același thread.
+    // Soluția: WaitlistEmailNotifier este un bean separat injectat prin constructor.
+    private final WaitlistEmailNotifier emailNotifier;
 
     private static final String PARENT_ROLE_NAME = "PARENT";
+    private static final String NOT_FOUND_STUFF = " nu a fost găsită.";
 
     // ── Adăugare pe lista de așteptare (public) ───────────────────────────────
 
@@ -147,7 +152,7 @@ public class WaitlistServiceImpl implements WaitlistService {
         WaitlistEntry entry = waitlistRepository.findById(entryId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.WAITLIST_ENTRY_NOT_FOUND,
-                        "Cererea cu id " + entryId + " nu a fost găsită."));
+                        "Cererea cu id " + entryId + NOT_FOUND_STUFF));
 
         // Guard: se poate aloca doar o cerere în așteptare
         if (entry.getStatus() != WaitlistStatus.WAITING) {
@@ -160,7 +165,7 @@ public class WaitlistServiceImpl implements WaitlistService {
         GroupClass group = groupClassRepository.findById(request.getGroupId())
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.GROUP_NOT_FOUND,
-                        "Grupa cu id " + request.getGroupId() + " nu a fost găsită."));
+                        "Grupa cu id " + request.getGroupId() + NOT_FOUND_STUFF));
 
         if (Boolean.FALSE.equals(group.getIsActive())) {
             throw new BusinessException(ErrorCode.GROUP_INACTIVE,
@@ -248,7 +253,8 @@ public class WaitlistServiceImpl implements WaitlistService {
         final User finalParent   = parent;
         final String finalRaw    = rawPassword;
         final boolean finalIsNew = newAccountCreated;
-        sendAllocationEmailAsync(finalParent, finalRaw, group.getGroupName(), finalIsNew);
+        // Apelăm prin emailNotifier (bean injectat), nu via "this" — proxy @Async funcționează corect
+        emailNotifier.sendAllocationEmailAsync(finalParent, finalRaw, group.getGroupName(), finalIsNew);
 
         String childName = savedChild.getChildLastName() + " " + savedChild.getChildFirstName();
         return new WaitlistAllocateResponse(
@@ -274,7 +280,7 @@ public class WaitlistServiceImpl implements WaitlistService {
         WaitlistEntry entry = waitlistRepository.findById(entryId)
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.WAITLIST_ENTRY_NOT_FOUND,
-                        "Cererea cu id " + entryId + " nu a fost găsită."));
+                        "Cererea cu id " + entryId + NOT_FOUND_STUFF));
 
         if (entry.getStatus() == WaitlistStatus.ALLOCATED) {
             throw new BusinessException(
@@ -317,21 +323,6 @@ public class WaitlistServiceImpl implements WaitlistService {
                 allocatedGroupId,
                 allocatedGroupName
         );
-    }
-
-    /**
-     * Trimite emailul de notificare alocare asincron, în afara tranzacției.
-     * Dacă mail server-ul e down → tranzacția BD nu se rollback-uiește.
-     */
-    @Async
-    protected void sendAllocationEmailAsync(User parent, String rawPassword,
-                                            String groupName, boolean isNewAccount) {
-        try {
-            emailService.sendWaitlistAllocated(parent, rawPassword, groupName, isNewAccount);
-        } catch (Exception e) {
-            log.warn("EMAIL_NOTIFICATION_FAILED event=waitlistAllocated parentId={} error=\"{}\"",
-                    parent.getIdUser(), e.getMessage());
-        }
     }
 
     /**

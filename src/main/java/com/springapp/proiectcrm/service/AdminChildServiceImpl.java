@@ -153,98 +153,51 @@ public class AdminChildServiceImpl implements AdminChildService {
      * Mută sau alocă un copil într-o grupă (7 pași, @Transactional atomic).
      * AuditLoggingAspect loghează MOVE_CHILD_START înainte de execuție.
      * Noi loghăm MOVE_CHILD_SUCCESS la final cu rezultatul complet.
+     *
+     * REFACTORIZARE (SonarCloud — Cognitive Complexity):
+     *   Metoda originală avea complexitate 23 (limita e 15).
+     *   Logica a fost extrasă în 4 metode private:
+     *     validateMoveRequest()     → validări inițiale (request null, copil inactiv)
+     *     resolveToGroup()          → încărcare și validare grupă destinație
+     *     resolveFromGroup()        → determinare grupă sursă (explicit sau autodetect)
+     *     validateTargetCapacity()  → verificare capacitate și duplicat
+     *   Fiecare metodă privată are o singură responsabilitate clară.
      */
     @Override
     @Transactional
     public AdminMoveChildResponse moveChild(int childId, AdminMoveChildRequest request) {
 
-        if (request == null || request.getToGroupId() == null) {
-            throw new IllegalArgumentException("toGroupId este obligatoriu.");
-        }
-
+        // Pasul 1: validări inițiale — request null, câmp obligatoriu, copil inactiv
+        validateMoveRequest(request);
         LocalDate effective = (request.getEffectiveDate() != null)
                 ? request.getEffectiveDate() : LocalDate.now();
-
         Child child = requireChild(childId);
+        validateChildActive(child);
 
-        // Guard: copil dezactivat individual nu poate fi înscris
-        if (Boolean.FALSE.equals(child.getActive())) {
-            throw new BusinessException(ErrorCode.CHILD_IS_INACTIVE,
-                    "Copilul " + child.getChildFirstName() + " " + child.getChildLastName()
-                            + " este dezactivat. Reactivează-l înainte de a-l înscrie într-o grupă.");
-        }
+        // Pasul 2: încarcă și validează grupa destinație
+        GroupClass toGroup = resolveToGroup(request.getToGroupId(), effective);
 
-        GroupClass toGroup = groupClassRepository.findById(request.getToGroupId())
-                .orElseThrow(() -> new IllegalArgumentException("Grupa destinație nu a fost găsită."));
+        // Pasul 3: determină grupa sursă (din request sau autodetect)
+        GroupClass fromGroup = resolveFromGroup(request, child, toGroup);
 
-        if (!Boolean.TRUE.equals(toGroup.getIsActive())) {
-            throw new IllegalStateException("Grupa destinație nu este activă.");
-        }
-        if (toGroup.getGroupEndDate() != null && effective.isAfter(toGroup.getGroupEndDate())) {
-            throw new IllegalStateException("Data efectivă este după data de sfârșit a grupei.");
-        }
+        // Pasul 4: verifică capacitate și că nu e deja înscris
+        validateTargetCapacity(child, toGroup);
 
-        // ── Determină fromGroup ───────────────────────────────────────────────
-        GroupClass fromGroup;
-        if (request.getFromGroupId() != null) {
-            fromGroup = groupClassRepository.findById(request.getFromGroupId())
-                    .orElseThrow(() -> new IllegalArgumentException("Grupa sursă nu a fost găsită."));
-        } else {
-            List<ChildGroup> active = childGroupRepository.findByChildAndActiveTrue(child);
-            if (active.size() > 1) {
-                throw new IllegalStateException(
-                        "Copilul are mai multe grupe active — trimite fromGroupId.");
-            }
-            fromGroup = active.size() == 1 ? active.getFirst().getGroup() : null;
-        }
-
-        if (fromGroup != null && fromGroup.getIdGroup() == toGroup.getIdGroup()) {
-            throw new IllegalStateException("Grupa sursă și grupa destinație sunt aceeași.");
-        }
-
-        // ── Verificare capacitate ─────────────────────────────────────────────
-        long activeInTarget = childGroupRepository.countByGroupAndActiveTrue(toGroup);
-        if (toGroup.getGroupMaxCapacity() > 0 && activeInTarget >= toGroup.getGroupMaxCapacity()) {
-            throw new IllegalStateException("Grupa " + toGroup.getGroupName() + " este plină ("
-                    + activeInTarget + "/" + toGroup.getGroupMaxCapacity() + " locuri).");
-        }
-        if (childGroupRepository.existsByChildAndGroupAndActiveTrue(child, toGroup)) {
-            throw new IllegalStateException("Copilul este deja înscris activ în grupa " + toGroup.getGroupName() + ".");
-        }
-
-        // ── Dezactivare enrollment vechi ──────────────────────────────────────
+        // Pasul 5: dezactivează înscrierea veche dacă există
         if (fromGroup != null) {
-            final GroupClass fg = fromGroup;
-            List<ChildGroup> fromEnrollments = childGroupRepository
-                    .findByChildAndActiveTrue(child).stream()
-                    .filter(x -> x.getGroup().getIdGroup() == fg.getIdGroup())
-                    .toList();
-            fromEnrollments.forEach(cg -> cg.setActive(Boolean.FALSE));
-            childGroupRepository.saveAll(fromEnrollments);
+            deactivateEnrollmentsInGroup(child, fromGroup);
         }
 
-        // ── Creare / reactivare enrollment nou ────────────────────────────────
-        // orElseGet: previne duplicate key dacă înregistrarea inactivă există deja
-        ChildGroup enrollment = childGroupRepository.findByChildAndGroup(child, toGroup)
-                .orElseGet(() -> {
-                    ChildGroup cg = new ChildGroup();
-                    cg.setChild(child);
-                    cg.setGroup(toGroup);
-                    return cg;
-                });
-        enrollment.setEnrollmentDate(effective);
-        enrollment.setActive(Boolean.TRUE);
-        childGroupRepository.save(enrollment);
+        // Pasul 6: creează sau reactivează înscrierea nouă
+        activateEnrollmentInGroup(child, toGroup, effective);
 
-        // ── Arhivare sesiuni viitoare ─────────────────────────────────────────
+        // Pasul 7: arhivează sesiunile viitoare din grupa veche
         int archivedCount = 0;
         if (fromGroup != null) {
             archivedCount = attendanceArchiveService.archiveAndDeleteFutureAttendance(
                     child.getIdChild(), fromGroup.getIdGroup(), effective);
         }
 
-        // SUCCESS log — AuditLoggingAspect a logat START, noi loghăm rezultatul
-        // fromGroupId=null înseamnă alocare nouă (copilul nu era nicăieri)
         log.info("MOVE_CHILD_SUCCESS childId={} fromGroupId={} toGroupId={} effectiveDate={} archivedAttendance={}",
                 childId,
                 fromGroup != null ? fromGroup.getIdGroup() : "none",
@@ -260,6 +213,147 @@ public class AdminChildServiceImpl implements AdminChildService {
                         ? "Copil alocat cu succes la grupa " + toGroup.getGroupName() + "."
                         : "Copil mutat cu succes în grupa " + toGroup.getGroupName() + "."
         );
+    }
+
+    // ── Metode private extrase din moveChild() pentru reducerea complexității ──
+
+    /**
+     * Validează că request-ul nu e null și că toGroupId e prezent.
+     * Aruncă IllegalArgumentException dacă validarea eșuează.
+     */
+    private void validateMoveRequest(AdminMoveChildRequest request) {
+        if (request == null || request.getToGroupId() == null) {
+            throw new IllegalArgumentException("toGroupId este obligatoriu.");
+        }
+    }
+
+    /**
+     * Verifică că un copil este activ înainte de a-l înscrie.
+     * Un copil dezactivat individual nu poate fi înscris fără reactivare prealabilă.
+     */
+    private void validateChildActive(Child child) {
+        if (Boolean.FALSE.equals(child.getActive())) {
+            throw new BusinessException(ErrorCode.CHILD_IS_INACTIVE,
+                    "Copilul " + child.getChildFirstName() + " " + child.getChildLastName()
+                            + " este dezactivat. Reactivează-l înainte de a-l înscrie într-o grupă.");
+        }
+    }
+
+    /**
+     * Încarcă grupa destinație și o validează:
+     *   - Există în BD
+     *   - isActive = true
+     *   - groupEndDate == null SAU effectiveDate <= groupEndDate
+     *
+     * @param toGroupId    ID-ul grupei destinație
+     * @param effective    data efectivă a mutării
+     * @return             GroupClass validată
+     */
+    private GroupClass resolveToGroup(Integer toGroupId, LocalDate effective) {
+        GroupClass toGroup = groupClassRepository.findById(toGroupId)
+                .orElseThrow(() -> new IllegalArgumentException("Grupa destinație nu a fost găsită."));
+        if (!Boolean.TRUE.equals(toGroup.getIsActive())) {
+            throw new IllegalStateException("Grupa destinație nu este activă.");
+        }
+        if (toGroup.getGroupEndDate() != null && effective.isAfter(toGroup.getGroupEndDate())) {
+            throw new IllegalStateException("Data efectivă este după data de sfârșit a grupei.");
+        }
+        return toGroup;
+    }
+
+    /**
+     * Determină grupa sursă (fromGroup) din care pleacă copilul.
+     *
+     * Logica:
+     *   - Dacă request.fromGroupId != null → încărcăm explicit acea grupă
+     *   - Dacă request.fromGroupId == null → autodetectăm din grupele active ale copilului:
+     *       - 0 grupe active → fromGroup = null (copilul nu era nicăieri → alocare nouă)
+     *       - 1 grupă activă → fromGroup = acea grupă
+     *       - 2+ grupe active → eroare, client trebuie să trimită fromGroupId explicit
+     *
+     * Verifică că fromGroup != toGroup (același grup = operație inutilă).
+     *
+     * @param request  request-ul de mutare
+     * @param child    copilul de mutat
+     * @param toGroup  grupa destinație (pentru verificarea de identitate)
+     * @return         GroupClass sursă sau null dacă e alocare nouă
+     */
+    private GroupClass resolveFromGroup(AdminMoveChildRequest request, Child child, GroupClass toGroup) {
+        GroupClass fromGroup;
+        if (request.getFromGroupId() != null) {
+            fromGroup = groupClassRepository.findById(request.getFromGroupId())
+                    .orElseThrow(() -> new IllegalArgumentException("Grupa sursă nu a fost găsită."));
+        } else {
+            List<ChildGroup> active = childGroupRepository.findByChildAndActiveTrue(child);
+            if (active.size() > 1) {
+                throw new IllegalStateException(
+                        "Copilul are mai multe grupe active — trimite fromGroupId.");
+            }
+            fromGroup = active.size() == 1 ? active.getFirst().getGroup() : null;
+        }
+        if (fromGroup != null && fromGroup.getIdGroup() == toGroup.getIdGroup()) {
+            throw new IllegalStateException("Grupa sursă și grupa destinație sunt aceeași.");
+        }
+        return fromGroup;
+    }
+
+    /**
+     * Verifică că grupa destinație are capacitate disponibilă și că
+     * copilul nu este deja înscris activ în ea.
+     *
+     * @param child    copilul care se înscrie
+     * @param toGroup  grupa destinație
+     */
+    private void validateTargetCapacity(Child child, GroupClass toGroup) {
+        long activeInTarget = childGroupRepository.countByGroupAndActiveTrue(toGroup);
+        if (toGroup.getGroupMaxCapacity() > 0 && activeInTarget >= toGroup.getGroupMaxCapacity()) {
+            throw new IllegalStateException("Grupa " + toGroup.getGroupName() + " este plină ("
+                    + activeInTarget + "/" + toGroup.getGroupMaxCapacity() + " locuri).");
+        }
+        if (childGroupRepository.existsByChildAndGroupAndActiveTrue(child, toGroup)) {
+            throw new IllegalStateException(
+                    "Copilul este deja înscris activ în grupa " + toGroup.getGroupName() + ".");
+        }
+    }
+
+    /**
+     * Dezactivează toate înscrieriileactive ale copilului în grupa specificată.
+     * Salvează modificările în BD.
+     *
+     * @param child      copilul
+     * @param fromGroup  grupa din care pleacă
+     */
+    private void deactivateEnrollmentsInGroup(Child child, GroupClass fromGroup) {
+        final GroupClass fg = fromGroup;
+        List<ChildGroup> fromEnrollments = childGroupRepository
+                .findByChildAndActiveTrue(child).stream()
+                .filter(x -> x.getGroup().getIdGroup() == fg.getIdGroup())
+                .toList();
+        fromEnrollments.forEach(cg -> cg.setActive(Boolean.FALSE));
+        childGroupRepository.saveAll(fromEnrollments);
+    }
+
+    /**
+     * Creează sau reactivează înscrierea copilului în grupa destinație.
+     *
+     * orElseGet: previne duplicate key dacă înregistrarea inactivă există deja —
+     * în loc să creeze un rând nou, reactivăm cel existent.
+     *
+     * @param child      copilul
+     * @param toGroup    grupa destinație
+     * @param effective  data efectivă a înscrierii
+     */
+    private void activateEnrollmentInGroup(Child child, GroupClass toGroup, LocalDate effective) {
+        ChildGroup enrollment = childGroupRepository.findByChildAndGroup(child, toGroup)
+                .orElseGet(() -> {
+                    ChildGroup cg = new ChildGroup();
+                    cg.setChild(child);
+                    cg.setGroup(toGroup);
+                    return cg;
+                });
+        enrollment.setEnrollmentDate(effective);
+        enrollment.setActive(Boolean.TRUE);
+        childGroupRepository.save(enrollment);
     }
 
     // ══════════════════════════════════════════════════════════════════════════

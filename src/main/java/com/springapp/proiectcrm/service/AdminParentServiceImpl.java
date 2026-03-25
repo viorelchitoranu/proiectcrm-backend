@@ -13,10 +13,8 @@ import com.springapp.proiectcrm.repository.ChildRepository;
 import com.springapp.proiectcrm.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +47,11 @@ public class AdminParentServiceImpl implements AdminParentService {
     private final ChildRepository      childRepository;
     private final ChildGroupRepository childGroupRepository;
     private final EmailService         emailService;
+    // OBLIGATORIU: metodele @Async trebuie apelate prin bean injectat, nu via "this"
+    // Dacă le apelam via this.sendEmailChangedAsync(), proxy-ul Spring era ocolit
+    // și @Async era ignorat — metoda rula sincron în același thread.
+    // Soluția: ParentEmailNotifier este un bean separat injectat prin constructor.
+    private final ParentEmailNotifier  emailNotifier;
 
     // ══════════════════════════════════════════════════════════════════════════
     // Helper privat
@@ -203,27 +206,13 @@ public class AdminParentServiceImpl implements AdminParentService {
                 LogSanitizer.sanitize(MdcFilter.maskEmail(newEmail)));
 
         String fullName = saved.getFirstName() + " " + saved.getLastName();
-        sendEmailChangedAsync(oldEmail, newEmail, fullName);
+        // Apelăm prin emailNotifier (bean injectat), nu via "this" — proxy @Async funcționează corect
+        emailNotifier.sendEmailChangedAsync(oldEmail, newEmail, fullName);
 
         long childCount = childRepository.findByParent(saved).size();
         return new AdminParentSummaryResponse(
                 saved.getIdUser(), saved.getFirstName(), saved.getLastName(),
                 saved.getEmail(), saved.getPhone(), childCount, saved.getActive());
-    }
-
-    /**
-     * Trimite emailurile de notificare asincron, în afara tranzacției principale.
-     * Dacă mail server-ul e down → tranzacția BD nu se rollback-uiește.
-     */
-    @Async
-    protected void sendEmailChangedAsync(String oldEmail, String newEmail, String parentName) {
-        try {
-            emailService.sendEmailChangedNotification(oldEmail, newEmail, parentName);
-        } catch (Exception e) {
-            // Eroarea de email nu trebuie să blocheze operația — loghăm ca WARN
-            log.warn("EMAIL_NOTIFICATION_FAILED event=emailChanged parentName=\"{}\" error=\"{}\"",
-                    parentName, e.getMessage());
-        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -270,7 +259,7 @@ public class AdminParentServiceImpl implements AdminParentService {
                 children.size(),
                 totalReleased);
 
-        sendDeactivatedAsync(saved, totalReleased);
+        //emailNotifier.sendDeactivatedAsync(saved, totalReleased);
 
         return new ParentActivationResponse(
                 saved.getIdUser(), saved.getLastName() + " " + saved.getFirstName(),
@@ -299,7 +288,7 @@ public class AdminParentServiceImpl implements AdminParentService {
         log.info("ACTIVATE_PARENT_OK parentId={} email={}",
                 parentId, MdcFilter.maskEmail(saved.getEmail()));
 
-        sendReactivatedAsync(saved);
+        //emailNotifier.sendReactivatedAsync(saved);
 
         return new ParentActivationResponse(
                 saved.getIdUser(), saved.getLastName() + " " + saved.getFirstName(),
@@ -307,23 +296,4 @@ public class AdminParentServiceImpl implements AdminParentService {
                 "Contul a fost reactivat. Copiii trebuie re-înscriși manual în grupe.");
     }
 
-    @Async
-    protected void sendDeactivatedAsync(User parent, int released) {
-        try {
-            emailService.sendParentDeactivated(parent, released);
-        } catch (Exception e) {
-            log.warn("EMAIL_NOTIFICATION_FAILED event=parentDeactivated parentId={} error=\"{}\"",
-                    parent.getIdUser(), e.getMessage());
-        }
-    }
-
-    @Async
-    protected void sendReactivatedAsync(User parent) {
-        try {
-            emailService.sendParentReactivated(parent);
-        } catch (Exception e) {
-            log.warn("EMAIL_NOTIFICATION_FAILED event=parentReactivated parentId={} error=\"{}\"",
-                    parent.getIdUser(), e.getMessage());
-        }
-    }
 }
