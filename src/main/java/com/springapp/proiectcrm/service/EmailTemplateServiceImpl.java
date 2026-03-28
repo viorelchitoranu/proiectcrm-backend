@@ -49,7 +49,11 @@ public class EmailTemplateServiceImpl implements EmailTemplateService {
     @Override
     @Transactional
     public EmailTemplate update(Integer id, String subject, String body) {
-        EmailTemplate template = findById(id);
+        EmailTemplate template = emailTemplateRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.BUSINESS_RULE_VIOLATION,
+                        "Template-ul cu id " + id + " nu există."
+                ));
 
         if (subject == null || subject.isBlank()) {
             throw new BusinessException(
