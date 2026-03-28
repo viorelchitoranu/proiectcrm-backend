@@ -40,127 +40,47 @@ INSERT INTO `email_template` (`code`, `name`, `subject`, `body`, `available_vars
 ('PARENT_CREDENTIALS',
  'Cont părinte creat',
  'Contul tău de părinte a fost creat — {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Ți-a fost creat un cont de părinte în platforma {{platformName}}.
-
-Date de autentificare:
-- Email: {{email}}
-- Parolă: {{password}}
-
-Îți recomandăm să îți schimbi parola după primul login, din secțiunea „Profil".
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nȚi-a fost creat un cont de părinte în platforma {{platformName}}.\n\nDate de autentificare:\n- Email: {{email}}\n- Parolă: {{password}}\n\nÎți recomandăm să îți schimbi parola după primul login, din secțiunea „Profil".\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{email}}, {{password}}, {{platformName}}, {{teamName}}'),
 
 ('PARENT_PASSWORD_RESET',
  'Parolă părinte resetată',
  'Parola contului tău a fost schimbată — {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Parola contului tău de părinte în platforma {{platformName}} a fost actualizată.
-
-Noua parolă este:
-- {{password}}
-
-Dacă nu ai inițiat tu această schimbare, te rugăm să ne contactezi cât mai curând.
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nParola contului tău de părinte în platforma {{platformName}} a fost actualizată.\n\nNoua parolă este:\n- {{password}}\n\nDacă nu ai inițiat tu această schimbare, te rugăm să ne contactezi cât mai curând.\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{password}}, {{platformName}}, {{teamName}}'),
 
 ('PARENT_RESET_OWN_PASSWORD',
  'Resetare parolă de către părinte',
  'Parola ta a fost modificată — {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Parola contului tău din platforma {{platformName}} a fost modificată cu succes.
-
-Dacă nu ai inițiat tu această schimbare, te rugăm să ne contactezi imediat.
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nParola contului tău din platforma {{platformName}} a fost modificată cu succes.\n\nDacă nu ai inițiat tu această schimbare, te rugăm să ne contactezi imediat.\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{platformName}}, {{teamName}}'),
 
 ('TEACHER_CREDENTIALS',
  'Cont profesor creat',
  'Cont profesor creat în {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Ți-a fost creat un cont de profesor în platforma {{platformName}}.
-
-Date de autentificare:
-- Email: {{email}}
-- Parolă: {{password}}
-
-Te rugăm ca după prima autentificare să îți schimbi parola din secțiunea „Profil".
-
-Toate cele bune,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nȚi-a fost creat un cont de profesor în platforma {{platformName}}.\n\nDate de autentificare:\n- Email: {{email}}\n- Parolă: {{password}}\n\nTe rugăm ca după prima autentificare să îți schimbi parola din secțiunea „Profil".\n\nToate cele bune,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{email}}, {{password}}, {{platformName}}, {{teamName}}'),
 
 ('TEACHER_PASSWORD_RESET',
  'Parolă profesor resetată',
  'Parola ta a fost resetată — {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Parola contului tău de profesor în platforma {{platformName}} a fost resetată de un administrator.
-
-Noua parolă este:
-- {{password}}
-
-Te rugăm ca după autentificare să o modifici din secțiunea „Profil".
-
-Toate cele bune,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nParola contului tău de profesor în platforma {{platformName}} a fost resetată de un administrator.\n\nNoua parolă este:\n- {{password}}\n\nTe rugăm ca după autentificare să o modifici din secțiunea „Profil".\n\nToate cele bune,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{password}}, {{platformName}}, {{teamName}}'),
 
 ('EMAIL_CHANGED',
  'Notificare schimbare email',
  'Adresa ta de email a fost modificată — {{platformName}}',
- 'Bună {{firstName}},
-
-Un administrator a modificat adresa de email asociată contului tău în platforma {{platformName}}.
-
-Noua adresă de email este: {{newEmail}}
-
-De acum înainte, folosește această adresă pentru a te autentifica în platformă.
-
-Dacă nu ai autorizat această modificare, te rugăm să ne contactezi cât mai curând.
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}},\n\nUn administrator a modificat adresa de email asociată contului tău în platforma {{platformName}}.\n\nNoua adresă de email este: {{newEmail}}\n\nDe acum înainte, folosește această adresă pentru a te autentifica în platformă.\n\nDacă nu ai autorizat această modificare, te rugăm să ne contactezi cât mai curând.\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{newEmail}}, {{platformName}}, {{teamName}}'),
 
 ('WAITLIST_ALLOCATED_NEW_ACCOUNT',
  'Alocat din waitlist — cont nou',
  'Ai fost înscris în {{platformName}} și alocat la o grupă!',
- 'Bună {{firstName}} {{lastName}},
-
-Cererea ta de pe lista de așteptare a fost procesată.
-Un administrator te-a alocat la grupa: {{groupName}}
-
-Ți-a fost creat un cont de părinte cu următoarele date de autentificare:
-- Email: {{email}}
-- Parolă temporară: {{password}}
-
-Te rugăm să te autentifici și să îți schimbi parola din secțiunea „Profil".
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nCererea ta de pe lista de așteptare a fost procesată.\nUn administrator te-a alocat la grupa: {{groupName}}\n\nȚi-a fost creat un cont de părinte cu următoarele date de autentificare:\n- Email: {{email}}\n- Parolă temporară: {{password}}\n\nTe rugăm să te autentifici și să îți schimbi parola din secțiunea „Profil".\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{email}}, {{password}}, {{groupName}}, {{platformName}}, {{teamName}}'),
 
 ('WAITLIST_ALLOCATED_EXISTING_ACCOUNT',
  'Alocat din waitlist — cont existent',
  'Copilul tău a fost alocat la o grupă — {{platformName}}',
- 'Bună {{firstName}} {{lastName}},
-
-Cererea ta de pe lista de așteptare a fost procesată.
-Un administrator a alocat copilul tău la grupa: {{groupName}}
-
-Te poți autentifica cu datele existente pentru a vedea detaliile.
-
-Cu drag,
-{{teamName}}',
+ 'Bună {{firstName}} {{lastName}},\n\nCererea ta de pe lista de așteptare a fost procesată.\nUn administrator a alocat copilul tău la grupa: {{groupName}}\n\nTe poți autentifica cu datele existente pentru a vedea detaliile.\n\nCu drag,\n{{teamName}}',
  '{{firstName}}, {{lastName}}, {{groupName}}, {{platformName}}, {{teamName}}');

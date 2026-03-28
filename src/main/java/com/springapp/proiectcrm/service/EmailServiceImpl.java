@@ -49,6 +49,10 @@ public class EmailServiceImpl implements EmailService {
     private static final String TPL_EMAIL_CHANGED                     = "EMAIL_CHANGED";
     private static final String TPL_WAITLIST_ALLOCATED_NEW            = "WAITLIST_ALLOCATED_NEW_ACCOUNT";
     private static final String TPL_WAITLIST_ALLOCATED_EXISTING       = "WAITLIST_ALLOCATED_EXISTING_ACCOUNT";
+    private static final String FIRST_NAME                              = "firstName";
+    private static final String LAST_NAME                               = "lastName";
+    private static final String EMAIL                                   = "email";
+    private static final String PASSWORD                                = "password";
 
     // ── Variabile comune — prezente în toate template-urile ──────────────────
     private Map<String, String> commonVars() {
@@ -77,10 +81,10 @@ public class EmailServiceImpl implements EmailService {
         var processed = emailTemplateService.processByCode(
                 TPL_TEACHER_CREDENTIALS,
                 vars(Map.of(
-                        "firstName", teacher.getFirstName(),
-                        "lastName",  teacher.getLastName(),
-                        "email",     teacher.getEmail(),
-                        "password",  rawPassword
+                        FIRST_NAME, teacher.getFirstName(),
+                        LAST_NAME,  teacher.getLastName(),
+                        EMAIL,     teacher.getEmail(),
+                        PASSWORD,  rawPassword
                 ))
         );
 
@@ -115,9 +119,9 @@ public class EmailServiceImpl implements EmailService {
         var processed = emailTemplateService.processByCode(
                 TPL_TEACHER_PASSWORD_RESET,
                 vars(Map.of(
-                        "firstName", teacher.getFirstName(),
-                        "lastName",  teacher.getLastName(),
-                        "password",  rawNewPassword
+                        FIRST_NAME, teacher.getFirstName(),
+                        LAST_NAME,  teacher.getLastName(),
+                        PASSWORD,  rawNewPassword
                 ))
         );
 
@@ -149,10 +153,10 @@ public class EmailServiceImpl implements EmailService {
         var processed = emailTemplateService.processByCode(
                 TPL_PARENT_CREDENTIALS,
                 vars(Map.of(
-                        "firstName", parent.getFirstName(),
-                        "lastName",  parent.getLastName(),
-                        "email",     parent.getEmail(),
-                        "password",  rawPassword
+                        FIRST_NAME, parent.getFirstName(),
+                        LAST_NAME,  parent.getLastName(),
+                        EMAIL,     parent.getEmail(),
+                        PASSWORD,  rawPassword
                 ))
         );
 
@@ -184,9 +188,9 @@ public class EmailServiceImpl implements EmailService {
         var processed = emailTemplateService.processByCode(
                 TPL_PARENT_PASSWORD_RESET,
                 vars(Map.of(
-                        "firstName", parent.getFirstName(),
-                        "lastName",  parent.getLastName(),
-                        "password",  rawNewPassword
+                        FIRST_NAME, parent.getFirstName(),
+                        LAST_NAME,  parent.getLastName(),
+                        PASSWORD,  rawNewPassword
                 ))
         );
 
@@ -216,7 +220,7 @@ public class EmailServiceImpl implements EmailService {
         var processed = emailTemplateService.processByCode(
                 TPL_EMAIL_CHANGED,
                 vars(Map.of(
-                        "firstName", parentName,
+                        FIRST_NAME, parentName,
                         "newEmail",  newEmail
                 ))
         );
@@ -293,11 +297,11 @@ public class EmailServiceImpl implements EmailService {
         String code = isNewAccount ? TPL_WAITLIST_ALLOCATED_NEW : TPL_WAITLIST_ALLOCATED_EXISTING;
 
         var specificVars = new java.util.HashMap<String, String>();
-        specificVars.put("firstName", parent.getFirstName());
-        specificVars.put("lastName",  parent.getLastName());
-        specificVars.put("email",     parent.getEmail());
+        specificVars.put(FIRST_NAME, parent.getFirstName());
+        specificVars.put(LAST_NAME,  parent.getLastName());
+        specificVars.put(EMAIL,     parent.getEmail());
         specificVars.put("groupName", groupName);
-        if (rawPassword != null) specificVars.put("password", rawPassword);
+        if (rawPassword != null) specificVars.put(PASSWORD, rawPassword);
 
         var processed = emailTemplateService.processByCode(code, vars(specificVars));
 
