@@ -38,6 +38,9 @@ public class AdminExcelReportService {
     private static final DateTimeFormatter DATE_FMT  = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("MMMM yyyy", new Locale("ro", "RO"));
 
+    private static final String[] PREZENTA_COLS = {"Copil", "Data Sesiunii", "Ora", "Status Prezență", "Observații"};
+    private static final String[] COPII_COLS    = {"Copil", "Vârstă", "Clasă", "Email Părinte", "Telefon Părinte", "Data Înscrierii"};
+
     @Transactional(readOnly = true)
     public byte[] generateFullReport() throws IOException {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
@@ -69,16 +72,14 @@ public class AdminExcelReportService {
 
         int row = 0;
 
-        // Titlu
         Row titleRow = sheet.createRow(row++);
         Cell titleCell = titleRow.createCell(0);
         titleCell.setCellValue("Raport Sumar Grupe — " + LocalDate.now().format(DATE_FMT));
         titleCell.setCellStyle(styles.title);
         sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 7));
 
-        row++; // linie goală
+        row++;
 
-        // Header
         Row headerRow = sheet.createRow(row++);
         String[] headers = {"Grupă", "Curs", "Școală", "Înscriși", "Total Sesiuni", "Ținute", "Anulate", "Planificate"};
         for (int i = 0; i < headers.length; i++) {
@@ -87,7 +88,6 @@ public class AdminExcelReportService {
             cell.setCellStyle(styles.header);
         }
 
-        // Date
         List<GroupClass> groups = groupClassRepository.findAll();
         boolean alternate = false;
         for (GroupClass g : groups) {
@@ -95,14 +95,14 @@ public class AdminExcelReportService {
             CellStyle rowStyle = alternate ? styles.dataAlt : styles.data;
             alternate = !alternate;
 
-            long enrolled  = childGroupRepository.countByGroupAndActiveTrue(g);
-            long total     = sessionRepository.countByGroup(g);
-            long taught    = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.TAUGHT);
-            long planned   = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.PLANNED);
-            long canceled  = total - taught - planned;
+            long enrolled = childGroupRepository.countByGroupAndActiveTrue(g);
+            long total    = sessionRepository.countByGroup(g);
+            long taught   = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.TAUGHT);
+            long planned  = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.PLANNED);
+            long canceled = total - taught - planned;
 
-            setCellValue(dataRow, 0, g.getGroupName(),                               rowStyle);
-            setCellValue(dataRow, 1, g.getCourse()  != null ? g.getCourse().getName()  : "—", rowStyle);
+            setCellValue(dataRow, 0, g.getGroupName(), rowStyle);
+            setCellValue(dataRow, 1, g.getCourse() != null ? g.getCourse().getName() : "—", rowStyle);
             setCellValue(dataRow, 2, g.getSchool()  != null ? g.getSchool().getName()  : "—", rowStyle);
             setCellNumeric(dataRow, 3, enrolled,  rowStyle);
             setCellNumeric(dataRow, 4, total,     rowStyle);
@@ -111,7 +111,6 @@ public class AdminExcelReportService {
             setCellNumeric(dataRow, 7, planned,   rowStyle);
         }
 
-        // Freeze header
         sheet.createFreezePane(0, 3);
         sheet.setAutoFilter(new CellRangeAddress(2, 2, 0, 7));
     }
@@ -137,49 +136,61 @@ public class AdminExcelReportService {
 
         List<GroupClass> groups = groupClassRepository.findAll();
         for (GroupClass g : groups) {
-            // Sub-titlu grupă
-            Row groupRow = sheet.createRow(row++);
-            Cell groupCell = groupRow.createCell(0);
-            groupCell.setCellValue(g.getGroupName() + (g.getCourse() != null ? " — " + g.getCourse().getName() : ""));
-            groupCell.setCellStyle(styles.subTitle);
-            sheet.addMergedRegion(new CellRangeAddress(row - 1, row - 1, 0, 4));
-
-            // Header coloane
-            Row hRow = sheet.createRow(row++);
-            String[] cols = {"Copil", "Data Sesiunii", "Ora", "Status Prezență", "Observații"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = hRow.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(styles.headerSmall);
-            }
-
-            // Sesiunile grupei
-            List<Session> sessions = sessionRepository.findByGroupOrderBySessionDateAsc(g);
-            for (Session s : sessions) {
-                List<Attendance> attendances = attendanceRepository.findBySession(s);
-                if (attendances.isEmpty()) {
-                    Row r = sheet.createRow(row++);
-                    setCellValue(r, 0, "—", styles.data);
-                    setCellValue(r, 1, s.getSessionDate().format(DATE_FMT), styles.data);
-                    setCellValue(r, 2, s.getTime().toString(), styles.data);
-                    setCellValue(r, 3, s.getSessionStatus().name(), styles.data);
-                    setCellValue(r, 4, "", styles.data);
-                } else {
-                    for (Attendance a : attendances) {
-                        Row r = sheet.createRow(row++);
-                        String childName = a.getChild().getChildLastName() + " " + a.getChild().getChildFirstName();
-                        setCellValue(r, 0, childName, styles.data);
-                        setCellValue(r, 1, s.getSessionDate().format(DATE_FMT), styles.data);
-                        setCellValue(r, 2, s.getTime().toString(), styles.data);
-                        setCellValue(r, 3, a.getStatus().name(), getAttendanceStyle(styles, a.getStatus()));
-                        setCellValue(r, 4, a.getNota() != null ? a.getNota() : "", styles.data);
-                    }
-                }
-            }
-            row++; // spațiu între grupe
+            row = writePrezentaGrupa(sheet, styles, g, row);
+            row++;
         }
 
         sheet.createFreezePane(0, 1);
+    }
+
+    // ── Extras din buildPrezentaDetaliata pentru a reduce Cognitive Complexity ─
+
+    private int writePrezentaGrupa(Sheet sheet, CellStyles styles, GroupClass g, int row) {
+        // Sub-titlu grupă
+        Row groupRow = sheet.createRow(row++);
+        Cell groupCell = groupRow.createCell(0);
+        groupCell.setCellValue(g.getGroupName()
+                + (g.getCourse() != null ? " — " + g.getCourse().getName() : ""));
+        groupCell.setCellStyle(styles.subTitle);
+        sheet.addMergedRegion(new CellRangeAddress(row - 1, row - 1, 0, 4));
+
+        // Header coloane
+        row = writeHeaderRow(sheet, styles.headerSmall, PREZENTA_COLS, row);
+
+        // Sesiunile grupei
+        List<Session> sessions = sessionRepository.findByGroupOrderBySessionDateAsc(g);
+        for (Session s : sessions) {
+            row = writePrezentaSession(sheet, styles, s, row);
+        }
+        return row;
+    }
+
+    private int writePrezentaSession(Sheet sheet, CellStyles styles, Session s, int row) {
+        List<Attendance> attendances = attendanceRepository.findBySession(s);
+        if (attendances.isEmpty()) {
+            Row r = sheet.createRow(row++);
+            setCellValue(r, 0, "—", styles.data);
+            setCellValue(r, 1, s.getSessionDate().format(DATE_FMT), styles.data);
+            setCellValue(r, 2, s.getTime().toString(), styles.data);
+            setCellValue(r, 3, s.getSessionStatus().name(), styles.data);
+            setCellValue(r, 4, "", styles.data);
+        } else {
+            for (Attendance a : attendances) {
+                row = writePrezentaAttendance(sheet, styles, s, a, row);
+            }
+        }
+        return row;
+    }
+
+    private int writePrezentaAttendance(Sheet sheet, CellStyles styles, Session s, Attendance a, int row) {
+        Row r = sheet.createRow(row++);
+        String childName = a.getChild().getChildLastName() + " " + a.getChild().getChildFirstName();
+        setCellValue(r, 0, childName, styles.data);
+        setCellValue(r, 1, s.getSessionDate().format(DATE_FMT), styles.data);
+        setCellValue(r, 2, s.getTime().toString(), styles.data);
+        setCellValue(r, 3, a.getStatus().name(), getAttendanceStyle(styles, a.getStatus()));
+        setCellValue(r, 4, a.getNota() != null ? a.getNota() : "", styles.data);
+        return row;
     }
 
     // ── Sheet 3: Copii per Grupă ──────────────────────────────────────────────
@@ -206,44 +217,56 @@ public class AdminExcelReportService {
         for (GroupClass g : groups) {
             List<ChildGroup> enrollments = childGroupRepository.findByGroupAndActiveTrue(g);
             if (enrollments.isEmpty()) continue;
-
-            // Sub-titlu
-            Row groupRow = sheet.createRow(row++);
-            Cell gc = groupRow.createCell(0);
-            gc.setCellValue(g.getGroupName()
-                    + (g.getCourse() != null ? " — " + g.getCourse().getName() : "")
-                    + (g.getSchool()  != null ? " / " + g.getSchool().getName()  : ""));
-            gc.setCellStyle(styles.subTitle);
-            sheet.addMergedRegion(new CellRangeAddress(row - 1, row - 1, 0, 5));
-
-            // Header
-            Row hRow = sheet.createRow(row++);
-            String[] cols = {"Copil", "Vârstă", "Clasă", "Email Părinte", "Telefon Părinte", "Data Înscrierii"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = hRow.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(styles.headerSmall);
-            }
-
-            boolean alt = false;
-            for (ChildGroup cg : enrollments) {
-                Child child  = cg.getChild();
-                User  parent = child.getParent();
-                Row r = sheet.createRow(row++);
-                CellStyle s = alt ? styles.dataAlt : styles.data;
-                alt = !alt;
-
-                setCellValue(r, 0, child.getChildLastName() + " " + child.getChildFirstName(), s);
-                setCellNumeric(r, 1, child.getAge() != null ? child.getAge() : 0, s);
-                setCellValue(r, 2, child.getSchoolClass() != null ? child.getSchoolClass() : "—", s);
-                setCellValue(r, 3, parent != null && parent.getEmail() != null ? parent.getEmail() : "—", s);
-                setCellValue(r, 4, parent != null && parent.getPhone() != null ? parent.getPhone() : "—", s);
-                setCellValue(r, 5, cg.getEnrollmentDate() != null ? cg.getEnrollmentDate().format(DATE_FMT) : "—", s);
-            }
+            row = writeCopiiGrupa(sheet, styles, g, enrollments, row);
             row++;
         }
 
         sheet.createFreezePane(0, 1);
+    }
+
+    // ── Extras din buildCopiiPerGrupa pentru a reduce Cognitive Complexity ─────
+
+    private int writeCopiiGrupa(Sheet sheet, CellStyles styles, GroupClass g,
+                                 List<ChildGroup> enrollments, int row) {
+        // Sub-titlu
+        Row groupRow = sheet.createRow(row++);
+        Cell gc = groupRow.createCell(0);
+        gc.setCellValue(buildGroupLabel(g));
+        gc.setCellStyle(styles.subTitle);
+        sheet.addMergedRegion(new CellRangeAddress(row - 1, row - 1, 0, 5));
+
+        // Header
+        row = writeHeaderRow(sheet, styles.headerSmall, COPII_COLS, row);
+
+        // Copii
+        boolean alt = false;
+        for (ChildGroup cg : enrollments) {
+            CellStyle s = alt ? styles.dataAlt : styles.data;
+            alt = !alt;
+            row = writeCopilRow(sheet, cg, s, row);
+        }
+        return row;
+    }
+
+    private String buildGroupLabel(GroupClass g) {
+        StringBuilder sb = new StringBuilder(g.getGroupName());
+        if (g.getCourse() != null) sb.append(" — ").append(g.getCourse().getName());
+        if (g.getSchool()  != null) sb.append(" / ").append(g.getSchool().getName());
+        return sb.toString();
+    }
+
+    private int writeCopilRow(Sheet sheet, ChildGroup cg, CellStyle style, int row) {
+        Child child  = cg.getChild();
+        User  parent = child.getParent();
+        Row r = sheet.createRow(row++);
+
+        setCellValue(r, 0, child.getChildLastName() + " " + child.getChildFirstName(), style);
+        setCellNumeric(r, 1, child.getAge() != null ? child.getAge() : 0, style);
+        setCellValue(r, 2, child.getSchoolClass() != null ? child.getSchoolClass() : "—", style);
+        setCellValue(r, 3, parent != null && parent.getEmail() != null ? parent.getEmail() : "—", style);
+        setCellValue(r, 4, parent != null && parent.getPhone() != null ? parent.getPhone() : "—", style);
+        setCellValue(r, 5, cg.getEnrollmentDate() != null ? cg.getEnrollmentDate().format(DATE_FMT) : "—", style);
+        return row;
     }
 
     // ── Sheet 4: Statistici Lunare ────────────────────────────────────────────
@@ -262,7 +285,6 @@ public class AdminExcelReportService {
         sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 6));
         row++;
 
-        // Calculează ultimele 6 luni
         LocalDate now = LocalDate.now();
         LocalDate[] monthStarts = new LocalDate[6];
         String[]    monthLabels = new String[6];
@@ -273,7 +295,6 @@ public class AdminExcelReportService {
                     + " " + m.getYear();
         }
 
-        // Header
         Row hRow = sheet.createRow(row++);
         Cell ghCell = hRow.createCell(0);
         ghCell.setCellValue("Grupă");
@@ -284,7 +305,6 @@ public class AdminExcelReportService {
             c.setCellStyle(styles.header);
         }
 
-        // Date per grupă
         List<GroupClass> groups = groupClassRepository.findAll();
         boolean alt = false;
         for (GroupClass g : groups) {
@@ -295,11 +315,11 @@ public class AdminExcelReportService {
             setCellValue(r, 0, g.getGroupName(), s);
 
             for (int i = 0; i < 6; i++) {
-                LocalDate start = monthStarts[i];
-                LocalDate end   = start.withDayOfMonth(start.lengthOfMonth());
-                List<Session> sessions = sessionRepository
+                LocalDate start   = monthStarts[i];
+                LocalDate end     = start.withDayOfMonth(start.lengthOfMonth());
+                List<Session> ses = sessionRepository
                         .findBySessionDateBetweenAndSessionStatus(start, end, SessionStatus.TAUGHT);
-                long present = attendanceRepository.countBySessionIn(sessions);
+                long present = attendanceRepository.countBySessionIn(ses);
                 setCellNumeric(r, i + 1, present, s);
             }
         }
@@ -307,7 +327,19 @@ public class AdminExcelReportService {
         sheet.createFreezePane(1, 3);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Helper comun — scriere rând header ────────────────────────────────────
+
+    private int writeHeaderRow(Sheet sheet, CellStyle style, String[] cols, int row) {
+        Row hRow = sheet.createRow(row++);
+        for (int i = 0; i < cols.length; i++) {
+            Cell c = hRow.createCell(i);
+            c.setCellValue(cols[i]);
+            c.setCellStyle(style);
+        }
+        return row;
+    }
+
+    // ── Helpers celule ────────────────────────────────────────────────────────
 
     private void setCellValue(Row row, int col, String value, CellStyle style) {
         Cell cell = row.createCell(col);
@@ -341,14 +373,14 @@ public class AdminExcelReportService {
             Font boldSmall  = createFont(wb, true,   9, IndexedColors.WHITE);
             Font regular    = createFont(wb, false,  9, IndexedColors.BLACK);
 
-            title      = buildStyle(wb, boldLarge,  IndexedColors.LIGHT_CORNFLOWER_BLUE, HorizontalAlignment.LEFT,  true);
-            subTitle   = buildStyle(wb, boldMedium, IndexedColors.PALE_BLUE,             HorizontalAlignment.LEFT,  true);
-            header     = buildStyle(wb, boldWhite,  IndexedColors.DARK_BLUE,             HorizontalAlignment.CENTER, true);
-            headerSmall= buildStyle(wb, boldSmall,  IndexedColors.CORNFLOWER_BLUE,       HorizontalAlignment.CENTER, true);
-            data       = buildStyle(wb, regular,    IndexedColors.WHITE,                 HorizontalAlignment.LEFT,  true);
-            dataAlt    = buildStyle(wb, regular,    IndexedColors.LEMON_CHIFFON,         HorizontalAlignment.LEFT,  true);
-            present    = buildStyle(wb, regular,    IndexedColors.LIGHT_GREEN,           HorizontalAlignment.CENTER, true);
-            absent     = buildStyle(wb, regular,    IndexedColors.ROSE,                  HorizontalAlignment.CENTER, true);
+            title       = buildStyle(wb, boldLarge,  IndexedColors.LIGHT_CORNFLOWER_BLUE, HorizontalAlignment.LEFT,   true);
+            subTitle    = buildStyle(wb, boldMedium, IndexedColors.PALE_BLUE,             HorizontalAlignment.LEFT,   true);
+            header      = buildStyle(wb, boldWhite,  IndexedColors.DARK_BLUE,             HorizontalAlignment.CENTER, true);
+            headerSmall = buildStyle(wb, boldSmall,  IndexedColors.CORNFLOWER_BLUE,       HorizontalAlignment.CENTER, true);
+            data        = buildStyle(wb, regular,    IndexedColors.WHITE,                 HorizontalAlignment.LEFT,   true);
+            dataAlt     = buildStyle(wb, regular,    IndexedColors.LEMON_CHIFFON,         HorizontalAlignment.LEFT,   true);
+            present     = buildStyle(wb, regular,    IndexedColors.LIGHT_GREEN,           HorizontalAlignment.CENTER, true);
+            absent      = buildStyle(wb, regular,    IndexedColors.ROSE,                  HorizontalAlignment.CENTER, true);
         }
 
         private Font createFont(XSSFWorkbook wb, boolean bold, int size, IndexedColors color) {

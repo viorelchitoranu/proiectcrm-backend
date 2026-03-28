@@ -17,14 +17,14 @@ import java.util.*;
 
 /**
  * Serviciu pentru generarea rapoartelor PDF cu JasperReports.
- *
+ * <p>
  * Generează PDF-uri profesionale fără fișiere .jrxml externe —
  * design-ul e construit programatic în Java pentru portabilitate maximă.
- *
+ * <p>
  * Rapoarte disponibile:
- *   generateSumarGrupePdf()   → tabel sumar toate grupele cu statistici
- *   generateFisaGrupaPdf(id)  → fișă individuală grupă cu lista copiilor
- *   generatePrezenteLunare()  → statistici prezențe pe ultimele 6 luni
+ * generateSumarGrupePdf()   → tabel sumar toate grupele cu statistici
+ * generateFisaGrupaPdf(id)  → fișă individuală grupă cu lista copiilor
+ * generatePrezenteLunare()  → statistici prezențe pe ultimele 6 luni
  */
 @Service
 @RequiredArgsConstructor
@@ -32,11 +32,28 @@ public class AdminPdfReportService {
 
     private final GroupClassRepository groupClassRepository;
     private final ChildGroupRepository childGroupRepository;
-    private final SessionRepository    sessionRepository;
+    private final SessionRepository sessionRepository;
     private final AttendanceRepository attendanceRepository;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
+    private static final String GROUPNAME = "groupName";
+    private static final String COURSENAME = "courseName";
+    private static final String SCHOOLNAME = "schoolName";
+    private static final String ENROLLED = "enrolled";
+    private static final String TOTAL = "total";
+    private static final String TAUGHT = "taught";
+    private static final String CANCELED = "canceled";
+    private static final String PLANNED = "planned";
+    private static final String REPORT_DATE = "REPORT_DATE";
+
+
+    private static final String CHILDNAME = "childName";
+    private static final String SCHOOLCLASS = "schoolClass";
+    private static final String PARENTNAME = "parentName";
+    private static final String PARENTEMAIL = "parentEmail";
+    private static final String PARENTPHONE = "parentPhone";
+    private static final String ENROLLDATE = "enrollDate";
     // ── Sumar Grupe ───────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -46,30 +63,30 @@ public class AdminPdfReportService {
 
         for (GroupClass g : groups) {
             long enrolled = childGroupRepository.countByGroupAndActiveTrue(g);
-            long total    = sessionRepository.countByGroup(g);
-            long taught   = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.TAUGHT);
-            long planned  = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.PLANNED);
+            long total = sessionRepository.countByGroup(g);
+            long taught = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.TAUGHT);
+            long planned = sessionRepository.countByGroupAndSessionStatus(g, SessionStatus.PLANNED);
             long canceled = total - taught - planned;
 
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("groupName",  g.getGroupName());
-            row.put("courseName", g.getCourse() != null ? g.getCourse().getName() : "—");
-            row.put("schoolName", g.getSchool() != null ? g.getSchool().getName() : "—");
-            row.put("enrolled",   (int) enrolled);
-            row.put("total",      (int) total);
-            row.put("taught",     (int) taught);
-            row.put("canceled",   (int) canceled);
-            row.put("planned",    (int) planned);
+            row.put(GROUPNAME, g.getGroupName());
+            row.put(COURSENAME, g.getCourse() != null ? g.getCourse().getName() : "—");
+            row.put(SCHOOLNAME, g.getSchool() != null ? g.getSchool().getName() : "—");
+            row.put(ENROLLED, (int) enrolled);
+            row.put(TOTAL, (int) total);
+            row.put(TAUGHT, (int) taught);
+            row.put(CANCELED, (int) canceled);
+            row.put(PLANNED, (int) planned);
             data.add(row);
         }
 
         Map<String, Object> params = new HashMap<>();
         params.put("REPORT_TITLE", "Sumar Grupe");
-        params.put("REPORT_DATE",  LocalDate.now().format(DATE_FMT));
+        params.put(REPORT_DATE, LocalDate.now().format(DATE_FMT));
         params.put("TOTAL_GROUPS", groups.size());
 
         JasperReport report = buildSumarGroupeReport();
-        JasperPrint  print  = JasperFillManager.fillReport(
+        JasperPrint print = JasperFillManager.fillReport(
                 report, params, new JRBeanCollectionDataSource(data));
         return JasperExportManager.exportReportToPdf(print);
     }
@@ -85,28 +102,18 @@ public class AdminPdfReportService {
         List<Map<String, Object>> data = new ArrayList<>();
 
         for (ChildGroup cg : enrollments) {
-            Child child  = cg.getChild();
-            User  parent = child.getParent();
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("childName",   child.getChildLastName() + " " + child.getChildFirstName());
-            row.put("age",         child.getAge() != null ? child.getAge().toString() : "—");
-            row.put("schoolClass", child.getSchoolClass() != null ? child.getSchoolClass() : "—");
-            row.put("parentName",  parent != null ? parent.getFirstName() + " " + parent.getLastName() : "—");
-            row.put("parentEmail", parent != null && parent.getEmail() != null ? parent.getEmail() : "—");
-            row.put("parentPhone", parent != null && parent.getPhone() != null ? parent.getPhone() : "—");
-            row.put("enrollDate",  cg.getEnrollmentDate() != null ? cg.getEnrollmentDate().format(DATE_FMT) : "—");
-            data.add(row);
+            data.add(buildFisaRow(cg));
         }
 
         Map<String, Object> params = new HashMap<>();
-        params.put("GROUP_NAME",   g.getGroupName());
-        params.put("COURSE_NAME",  g.getCourse() != null ? g.getCourse().getName() : "—");
-        params.put("SCHOOL_NAME",  g.getSchool() != null ? g.getSchool().getName() : "—");
+        params.put("GROUP_NAME", g.getGroupName());
+        params.put("COURSE_NAME", g.getCourse() != null ? g.getCourse().getName() : "—");
+        params.put("SCHOOL_NAME", g.getSchool() != null ? g.getSchool().getName() : "—");
         params.put("TOTAL_CHILDREN", enrollments.size());
-        params.put("REPORT_DATE",  LocalDate.now().format(DATE_FMT));
+        params.put(REPORT_DATE, LocalDate.now().format(DATE_FMT));
 
         JasperReport report = buildFisaGrupaReport();
-        JasperPrint  print  = JasperFillManager.fillReport(
+        JasperPrint print = JasperFillManager.fillReport(
                 report, params, new JRBeanCollectionDataSource(data));
         return JasperExportManager.exportReportToPdf(print);
     }
@@ -121,13 +128,13 @@ public class AdminPdfReportService {
 
         for (GroupClass g : groups) {
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("groupName", g.getGroupName());
+            row.put(GROUPNAME, g.getGroupName());
 
             long totalPresent = 0;
             for (int i = 5; i >= 0; i--) {
                 LocalDate start = now.minusMonths(i).withDayOfMonth(1);
-                LocalDate end   = start.withDayOfMonth(start.lengthOfMonth());
-                String label    = start.getMonth()
+                LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
+                String label = start.getMonth()
                         .getDisplayName(TextStyle.SHORT, new Locale("ro", "RO"))
                         .substring(0, 3);
                 List<Session> sessions = sessionRepository
@@ -137,13 +144,13 @@ public class AdminPdfReportService {
                 row.put("label" + (6 - i), label);
                 totalPresent += present;
             }
-            row.put("total", (int) totalPresent);
+            row.put(TOTAL, (int) totalPresent);
             data.add(row);
         }
 
         // Label luni pentru header
         Map<String, Object> params = new HashMap<>();
-        params.put("REPORT_DATE", LocalDate.now().format(DATE_FMT));
+        params.put(REPORT_DATE, LocalDate.now().format(DATE_FMT));
         for (int i = 5; i >= 0; i--) {
             LocalDate m = now.minusMonths(i).withDayOfMonth(1);
             String label = m.getMonth().getDisplayName(TextStyle.SHORT, new Locale("ro", "RO"))
@@ -152,9 +159,25 @@ public class AdminPdfReportService {
         }
 
         JasperReport report = buildPrezenteLunareReport();
-        JasperPrint  print  = JasperFillManager.fillReport(
+        JasperPrint print = JasperFillManager.fillReport(
                 report, params, new JRBeanCollectionDataSource(data));
         return JasperExportManager.exportReportToPdf(print);
+    }
+
+    // ── Helper — construire rând fișă copil ───────────────────────────────────
+
+    private Map<String, Object> buildFisaRow(ChildGroup cg) {
+        Child child  = cg.getChild();
+        User  parent = child.getParent();
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put(CHILDNAME,   child.getChildLastName() + " " + child.getChildFirstName());
+        row.put("age",       child.getAge() != null ? child.getAge().toString() : "—");
+        row.put(SCHOOLCLASS, child.getSchoolClass() != null ? child.getSchoolClass() : "—");
+        row.put(PARENTNAME,  parent != null ? parent.getFirstName() + " " + parent.getLastName() : "—");
+        row.put(PARENTEMAIL, parent != null && parent.getEmail() != null ? parent.getEmail() : "—");
+        row.put(PARENTPHONE, parent != null && parent.getPhone() != null ? parent.getPhone() : "—");
+        row.put(ENROLLDATE,  cg.getEnrollmentDate() != null ? cg.getEnrollmentDate().format(DATE_FMT) : "—");
+        return row;
     }
 
     // ── Constructori rapoarte JasperReports (programatic) ────────────────────
@@ -163,12 +186,12 @@ public class AdminPdfReportService {
         JasperDesign design = createBaseDesign("Sumar Grupe", 842, 595); // A4 landscape
 
         // Parameters
-        addParam(design, "REPORT_TITLE",  String.class);
-        addParam(design, "REPORT_DATE",   String.class);
-        addParam(design, "TOTAL_GROUPS",  Integer.class);
+        addParam(design, "REPORT_TITLE", String.class);
+        addParam(design, REPORT_DATE, String.class);
+        addParam(design, "TOTAL_GROUPS", Integer.class);
 
         // Fields
-        String[] fields = {"groupName", "courseName", "schoolName", "enrolled", "total", "taught", "canceled", "planned"};
+        String[] fields = {GROUPNAME, COURSENAME, SCHOOLNAME, ENROLLED, TOTAL, TAUGHT, CANCELED, PLANNED};
         Class<?>[] types = {String.class, String.class, String.class, Integer.class, Integer.class, Integer.class, Integer.class, Integer.class};
         for (int i = 0; i < fields.length; i++) addField(design, fields[i], types[i]);
 
@@ -195,7 +218,7 @@ public class AdminPdfReportService {
         // Detail band
         JRDesignBand detail = new JRDesignBand();
         detail.setHeight(18);
-        String[] fieldNames = {"groupName", "courseName", "schoolName", "enrolled", "total", "taught", "canceled", "planned"};
+        String[] fieldNames = {GROUPNAME, COURSENAME, SCHOOLNAME, ENROLLED, TOTAL, TAUGHT, CANCELED, PLANNED};
         x = 10;
         for (int i = 0; i < fieldNames.length; i++) {
             addFieldCell(detail, fieldNames[i], x, 0, widths[i], 16);
@@ -209,13 +232,13 @@ public class AdminPdfReportService {
     private JasperReport buildFisaGrupaReport() throws JRException {
         JasperDesign design = createBaseDesign("Fișă Grupă", 595, 842); // A4 portrait
 
-        addParam(design, "GROUP_NAME",     String.class);
-        addParam(design, "COURSE_NAME",    String.class);
-        addParam(design, "SCHOOL_NAME",    String.class);
+        addParam(design, "GROUP_NAME", String.class);
+        addParam(design, "COURSE_NAME", String.class);
+        addParam(design, "SCHOOL_NAME", String.class);
         addParam(design, "TOTAL_CHILDREN", Integer.class);
-        addParam(design, "REPORT_DATE",    String.class);
+        addParam(design, REPORT_DATE, String.class);
 
-        String[] fields = {"childName", "age", "schoolClass", "parentName", "parentEmail", "parentPhone", "enrollDate"};
+        String[] fields = {CHILDNAME, "age", SCHOOLCLASS, PARENTNAME, PARENTEMAIL, PARENTPHONE, ENROLLDATE};
         for (String f : fields) addField(design, f, String.class);
 
         JRDesignBand title = new JRDesignBand();
@@ -240,7 +263,7 @@ public class AdminPdfReportService {
 
         JRDesignBand detail = new JRDesignBand();
         detail.setHeight(16);
-        String[] flds = {"childName", "age", "schoolClass", "parentName", "parentEmail", "parentPhone", "enrollDate"};
+        String[] flds = {CHILDNAME, "age", SCHOOLCLASS, PARENTNAME, PARENTEMAIL, PARENTPHONE, ENROLLDATE};
         x = 5;
         for (int i = 0; i < flds.length; i++) {
             addFieldCell(detail, flds[i], x, 0, widths[i], 14);
@@ -254,12 +277,12 @@ public class AdminPdfReportService {
     private JasperReport buildPrezenteLunareReport() throws JRException {
         JasperDesign design = createBaseDesign("Prezențe Lunare", 842, 595);
 
-        addParam(design, "REPORT_DATE", String.class);
+        addParam(design, REPORT_DATE, String.class);
         for (int i = 1; i <= 6; i++) addParam(design, "LABEL_M" + i, String.class);
 
-        addField(design, "groupName", String.class);
+        addField(design, GROUPNAME, String.class);
         for (int i = 1; i <= 6; i++) addField(design, "m" + i, Integer.class);
-        addField(design, "total", Integer.class);
+        addField(design, TOTAL, Integer.class);
 
         JRDesignBand title = new JRDesignBand();
         title.setHeight(50);
@@ -273,21 +296,21 @@ public class AdminPdfReportService {
         int[] mWidths = {90, 90, 90, 90, 90, 90};
         int x = 175;
         for (int i = 1; i <= 6; i++) {
-            addTextFieldParamHeader(colHeader, "$P{LABEL_M" + i + "}", x, 0, mWidths[i-1], 18);
-            x += mWidths[i-1] + 5;
+            addTextFieldParamHeader(colHeader, "$P{LABEL_M" + i + "}", x, 0, mWidths[i - 1], 18);
+            x += mWidths[i - 1] + 5;
         }
-        addStaticHeader(colHeader, "Total", x, 0, 60, 18);
+        addStaticHeader(colHeader, TOTAL, x, 0, 60, 18);
         design.setColumnHeader(colHeader);
 
         JRDesignBand detail = new JRDesignBand();
         detail.setHeight(16);
-        addFieldCell(detail, "groupName", 10, 0, 160, 14);
+        addFieldCell(detail, GROUPNAME, 10, 0, 160, 14);
         x = 175;
         for (int i = 1; i <= 6; i++) {
-            addFieldCell(detail, "m" + i, x, 0, mWidths[i-1], 14);
-            x += mWidths[i-1] + 5;
+            addFieldCell(detail, "m" + i, x, 0, mWidths[i - 1], 14);
+            x += mWidths[i - 1] + 5;
         }
-        addFieldCell(detail, "total", x, 0, 60, 14);
+        addFieldCell(detail, TOTAL, x, 0, 60, 14);
         ((JRDesignSection) design.getDetailSection()).addBand(detail);
 
         return JasperCompileManager.compileReport(design);
@@ -325,7 +348,10 @@ public class AdminPdfReportService {
     private void addStaticText(JRDesignBand band, String text, int x, int y, int w, int h, int fontSize, boolean bold) {
         JRDesignStaticText st = new JRDesignStaticText();
         st.setText(text);
-        st.setX(x); st.setY(y); st.setWidth(w); st.setHeight(h);
+        st.setX(x);
+        st.setY(y);
+        st.setWidth(w);
+        st.setHeight(h);
         st.setFontSize((float) fontSize);
         st.setBold(bold);
         band.addElement(st);
@@ -334,7 +360,10 @@ public class AdminPdfReportService {
     private void addStaticHeader(JRDesignBand band, String text, int x, int y, int w, int h) {
         JRDesignStaticText st = new JRDesignStaticText();
         st.setText(text);
-        st.setX(x); st.setY(y); st.setWidth(w); st.setHeight(h);
+        st.setX(x);
+        st.setY(y);
+        st.setWidth(w);
+        st.setHeight(h);
         st.setFontSize(8f);
         st.setBold(true);
         st.setBackcolor(new java.awt.Color(0x33, 0x66, 0x99));
@@ -349,7 +378,10 @@ public class AdminPdfReportService {
         JRDesignExpression exp = new JRDesignExpression();
         exp.setText(expr);
         tf.setExpression(exp);
-        tf.setX(x); tf.setY(y); tf.setWidth(w); tf.setHeight(h);
+        tf.setX(x);
+        tf.setY(y);
+        tf.setWidth(w);
+        tf.setHeight(h);
         tf.setFontSize((float) fontSize);
         tf.setBold(bold);
         band.addElement(tf);
@@ -360,7 +392,10 @@ public class AdminPdfReportService {
         JRDesignExpression exp = new JRDesignExpression();
         exp.setText(expr);
         tf.setExpression(exp);
-        tf.setX(x); tf.setY(y); tf.setWidth(w); tf.setHeight(h);
+        tf.setX(x);
+        tf.setY(y);
+        tf.setWidth(w);
+        tf.setHeight(h);
         tf.setFontSize(8f);
         tf.setBold(true);
         tf.setBackcolor(new java.awt.Color(0x33, 0x66, 0x99));
@@ -375,7 +410,10 @@ public class AdminPdfReportService {
         JRDesignExpression exp = new JRDesignExpression();
         exp.setText("$F{" + fieldName + "}");
         tf.setExpression(exp);
-        tf.setX(x); tf.setY(y); tf.setWidth(w); tf.setHeight(h);
+        tf.setX(x);
+        tf.setY(y);
+        tf.setWidth(w);
+        tf.setHeight(h);
         tf.setFontSize(8f);
         band.addElement(tf);
     }
