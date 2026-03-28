@@ -144,6 +144,30 @@
             <version>7.0.6</version>
         </dependency>
 
+        <!-- ============================================================
+     FAZA 5 — Dependențe de adăugat în pom.xml
+     Adaugă în secțiunea <dependencies>
+     ============================================================ -->
+
+        <!-- Spring Boot Actuator — health, metrics, monitoring -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Micrometer Prometheus — export metrics pentru Prometheus/Grafana (opțional) -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- Bucket4j Core — rate limiting în memorie (fără Redis, simplu și eficient) -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
+        </dependency>
+
     </dependencies>
 
     <build>

@@ -14,6 +14,7 @@ import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.cors.CorsConfiguration;
@@ -26,49 +27,40 @@ import java.util.List;
 /**
  * Configurarea principală Spring Security.
  *
- * Modificări față de versiunea anterioară (pentru Modulul 5 — Message Board):
+ * Modificări Faza 5:
  *
- * 1. Adăugat: .requestMatchers("/ws/**").authenticated()
- *    SockJS (fallback WebSocket) face cereri HTTP la /ws/info și /ws/{id}/...
- *    pentru negocierea conexiunii. Aceste cereri transportă JSESSIONID →
- *    Spring Security le poate autentifica. Fără această regulă, SockJS ar
- *    putea fi accesat anonim sau blocat de regula anyRequest().authenticated().
+ * 1. Adăugat: RateLimitFilter înainte de UsernamePasswordAuthenticationFilter
+ *    Filtru Bucket4j: 5 login/min per IP, 200 req/min per IP pentru API general.
  *
- * 2. Adăugat: .requestMatchers("/api/board/**").authenticated()
- *    Endpoint-ele REST ale forumului (history, delete) necesită autentificare.
- *    Nu restricționăm la un rol specific — verificarea rolului se face per endpoint
- *    (adminul poate șterge cu @PreAuthorize, istoricul e pentru toți autentificații).
- *
- * 3. Adăugat: @EnableMethodSecurity
- *    Necesar pentru ca @PreAuthorize pe deletePost() să funcționeze.
+ * 2. Adăugat: reguli pentru /actuator/**
+ *    - /actuator/health → permitAll (pentru health checks externe, Docker, load balancer)
+ *    - /actuator/**     → hasRole("ADMIN") — restul endpoint-urilor doar pentru admin
  */
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity   // NOU: activează @PreAuthorize pe metode individuale
+@EnableMethodSecurity
 public class SecurityConfig {
 
-    // FIX: CORS origins din properties, nu hardcodat
     @Value("${app.cors.allowed-origins}")
     private String[] allowedOrigins;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
-                                                   SecurityContextRepository securityContextRepository) throws Exception {
+                                                   SecurityContextRepository securityContextRepository,
+                                                   RateLimitFilter rateLimitFilter) throws Exception {
         http
-                // ── CSRF: activat cu CookieCsrfTokenRepository ────────────────────────
-                // Backend trimite cookie XSRF-TOKEN (HttpOnly=false) → frontend îl citește
-                // și îl trimite în header-ul X-XSRF-TOKEN la fiecare request non-GET.
-                // Ignorăm CSRF pentru:
-                //   /api/auth/**  → login/logout nu necesită token (sesiunea nu există încă)
-                //   /ws/**        → SockJS gestionează propria autentificare prin JSESSIONID
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
-                        .ignoringRequestMatchers("/api/auth/**", "/ws/**")
+                        .ignoringRequestMatchers("/api/auth/**", "/ws/**", "/actuator/**")
                 )
                 .cors(Customizer.withDefaults())
                 .securityContext(sc -> sc.securityContextRepository(securityContextRepository))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+
+                // ── Faza 5: RateLimitFilter adăugat în lanțul de filtre ───────────────
+                .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/public/**").permitAll()
@@ -77,18 +69,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/courses/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/groups/**").permitAll()
 
-                        // ── NOU: WebSocket SockJS negociere ────────────────────────────────
-                        // SockJS face cereri HTTP la /ws/info, /ws/{server}/{session}/...
-                        // Trebuie autentificate — cookie JSESSIONID e trimis automat de browser.
-                        // ATENTIE: dacă lăsăm /ws/** la anyRequest() fără regulă explicită,
-                        // ordinea regulilor poate cauza comportament neașteptat.
+                        // ── Actuator: health public, restul doar ADMIN ──────────────────────
+                        .requestMatchers("/actuator/health").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+
                         .requestMatchers("/ws/**").authenticated()
-
-                        // ── NOU: REST endpoints forum ──────────────────────────────────────
-                        // History: orice utilizator autentificat (rol verificat în service)
-                        // Delete: @PreAuthorize("hasRole('ADMIN')") în controller
                         .requestMatchers("/api/board/**").authenticated()
-
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/teacher/**").hasRole("TEACHER")
                         .requestMatchers("/api/parent/**").hasRole("PARENT")
@@ -116,8 +102,6 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration cfg = new CorsConfiguration();
-
-        // FIX: origins din @Value, suportă multiple origini separate prin virgulă
         cfg.setAllowedOrigins(Arrays.asList(allowedOrigins));
         cfg.setAllowCredentials(true);
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
