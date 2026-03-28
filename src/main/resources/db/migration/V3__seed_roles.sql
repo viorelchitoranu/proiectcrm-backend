@@ -21,11 +21,15 @@ INSERT IGNORE INTO `role` (`role_name`, `created_date`) VALUES
  
 -- Cont admin implicit — role_id=3 = ADMIN
 -- Parolă: de setat manual după primul deploy
+-- Cont admin implicit — role_id=3 = ADMIN
+-- IMPORTANT: Schimbă parola după primul login!
+-- Parola implicită se setează manual în baza de date după deployment.
+-- Nu stoca hash-uri reale în codul sursă.
 INSERT IGNORE INTO `user`
     (`email`, `password`, `first_name`, `last_name`, `is_active`, `active`, `created_at`, `role_id`)
 VALUES (
     'admin@platform.ro',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
+    'CHANGE_ME_SET_REAL_BCRYPT_HASH_AFTER_DEPLOY',
     'Admin',
     'Platform',
     1,
