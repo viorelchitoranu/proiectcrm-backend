@@ -21,6 +21,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+
 import java.util.Arrays;
 import java.util.List;
 
@@ -35,6 +36,15 @@ import java.util.List;
  * 2. Adăugat: reguli pentru /actuator/**
  *    - /actuator/health → permitAll (pentru health checks externe, Docker, load balancer)
  *    - /actuator/**     → hasRole("ADMIN") — restul endpoint-urilor doar pentru admin
+ *
+ *     * Configurarea principală Spring Security.
+ *  *
+ *  * Modificări Faza 5 + OPS Dashboard:
+ *  *
+ *  * 1. RateLimitFilter — Bucket4j: 5 login/min per IP, 200 req/min per IP
+ *  * 2. ActuatorApiKeyFilter — protejează /actuator/** și /api/internal/**
+ *  *    cu X-OPS-API-KEY header (acces doar pentru OPS Dashboard)
+ *  * 3. /api/internal/** → permitAll în Spring Security (protecția vine din filtrul API Key)
  */
 @Configuration
 @EnableWebSecurity
@@ -47,19 +57,21 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    SecurityContextRepository securityContextRepository,
-                                                   RateLimitFilter rateLimitFilter) throws Exception {
+                                                   RateLimitFilter rateLimitFilter,
+                                                   ActuatorApiKeyFilter actuatorApiKeyFilter) throws Exception {
         http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
-                        .ignoringRequestMatchers("/api/auth/**", "/ws/**", "/actuator/**")
+                        // /api/internal nu are sesiune Spring — ignorăm CSRF
+                        .ignoringRequestMatchers("/api/auth/**", "/ws/**", "/actuator/**", "/api/internal/**")
                 )
                 .cors(Customizer.withDefaults())
                 .securityContext(sc -> sc.securityContextRepository(securityContextRepository))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
 
-                // ── Faza 5: RateLimitFilter adăugat în lanțul de filtre ───────────────
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(actuatorApiKeyFilter, UsernamePasswordAuthenticationFilter.class)
 
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
@@ -69,9 +81,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/courses/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/groups/**").permitAll()
 
-                        // ── Actuator: health public, restul doar ADMIN ──────────────────────
+                        // Actuator + Internal — protejate de ActuatorApiKeyFilter, nu de Spring roles
                         .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/**").permitAll()
+                        .requestMatchers("/api/internal/**").permitAll()
 
                         .requestMatchers("/ws/**").authenticated()
                         .requestMatchers("/api/board/**").authenticated()
