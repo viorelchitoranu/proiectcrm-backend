@@ -102,7 +102,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
             if (!probe.isConsumed()) {
                 long retryAfterSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000;
-                log.warn("RATE_LIMIT_API ip={} path={} retryAfter={}s", ip, path, retryAfterSeconds);
+                log.warn("RATE_LIMIT_API ip={} path={} retryAfter={}s", ip, sanitizeLog(path), retryAfterSeconds);
                 sendRateLimitResponse(response, retryAfterSeconds,
                         "Prea multe request-uri. Încearcă din nou în " + retryAfterSeconds + " secunde.");
                 return;
@@ -150,13 +150,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private String extractClientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
+            return sanitizeLog(forwarded.split(",")[0].trim());
         }
         String realIp = request.getHeader("X-Real-IP");
         if (realIp != null && !realIp.isBlank()) {
-            return realIp.trim();
+            return sanitizeLog(realIp.trim());
         }
         return request.getRemoteAddr();
+    }
+
+    private String sanitizeLog(String value) {
+        return value == null ? "" : value.replaceAll("[\r\n]", "_");
     }
 
     private void sendRateLimitResponse(HttpServletResponse response,
