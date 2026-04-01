@@ -84,7 +84,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
             if (!probe.isConsumed()) {
                 long retryAfterSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000;
-                log.warn("RATE_LIMIT_LOGIN ip={} retryAfter={}s", ip, retryAfterSeconds);
+                log.warn("RATE_LIMIT_LOGIN ip={} retryAfter={}s", sanitizeLog(ip), retryAfterSeconds);
                 sendRateLimitResponse(response, retryAfterSeconds,
                         "Prea multe încercări de login. Încearcă din nou în " + retryAfterSeconds + " secunde.");
                 return;
@@ -102,7 +102,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
             if (!probe.isConsumed()) {
                 long retryAfterSeconds = probe.getNanosToWaitForRefill() / 1_000_000_000;
-                log.warn("RATE_LIMIT_API ip={} path={} retryAfter={}s", ip, sanitizeLog(path), retryAfterSeconds);
+                log.warn("RATE_LIMIT_API ip={} path={} retryAfter={}s",
+                        sanitizeLog(ip), sanitizeLog(path), retryAfterSeconds);
                 sendRateLimitResponse(response, retryAfterSeconds,
                         "Prea multe request-uri. Încearcă din nou în " + retryAfterSeconds + " secunde.");
                 return;

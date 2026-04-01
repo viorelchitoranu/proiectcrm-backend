@@ -101,7 +101,9 @@ public class ActuatorApiKeyFilter extends OncePerRequestFilter {
 
         if (receivedKey == null || !receivedKey.equals(expectedApiKey)) {
             String safePath = path.replaceAll("[\r\n]", "_");
-            log.warn("OPS_UNAUTHORIZED ip={} path={}", request.getRemoteAddr(), safePath);
+
+            String safeIp = request.getRemoteAddr().replaceAll("[\r\n]", "_");
+            log.warn("OPS_UNAUTHORIZED ip={} path={}", safeIp, safePath);
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             response.setContentType("application/json");
             response.getWriter().write(
