@@ -1,0 +1,46 @@
+name: Deploy Backend
+
+on:
+  workflow_dispatch:  # buton manual în GitHub Actions
+
+jobs:
+  deploy:
+    name: Deploy pe VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout cod
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copiază sursele pe server
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/proiectcrm/CRM_Backend/
+
+      - name: Rebuild și repornește backend
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            cd /opt/proiectcrm
+
+            # Curăță containerul vechi dacă există cu nume greșit
+            OLD=$(docker ps -aq --filter "name=crm_backend" --filter "status=exited")
+            if [ -n "$OLD" ]; then
+              docker rm $OLD
+            fi
+
+            # Rebuild și repornire
+            docker-compose --env-file .env.production up --build -d backend
+
+            # Verifică că a pornit
+            sleep 10
+            docker-compose ps backend
+          EOF

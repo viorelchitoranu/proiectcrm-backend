@@ -11,20 +11,18 @@
       app.log    → toate evenimentele INFO+ (30 zile, max 1 GB)
       error.log  → WARN si ERROR (90 zile, max 500 MB)
 
-    Format log exemplu:
-      2026-03-15 14:32:07.418 INFO  [req:a3f9c2d1] [user:ion***@***.ro] [POST /api/admin/children/5/deactivate]
-      c.s.p.service.AdminChildServiceImpl - DEACTIVATE_CHILD child=5 slotsReleased=2
-
-    MDC keys (injectate automat de MdcFilter.java per fiecare request HTTP):
-      requestId  → 8 caractere UUID — coreleaza toate logurile unui request
-      userEmail  → email mascat GDPR (ion***@***.ro) sau "anon" daca neautentificat
-      httpMethod → GET / POST / PATCH / DELETE
-      httpPath   → /api/admin/children/5/deactivate
-
-    ATENTIE: MDC.clear() in MdcFilter.finally() este OBLIGATORIU.
-    Fara clear(), un thread refolosit din pool ar purta MDC-ul request-ului anterior.
+    FIX: folosim <springProperty> pentru a citi logging.file.path
+    din Spring Environment — logback se initializeaza inainte ca
+    Spring Boot sa proceseze variabilele de mediu, deci ${logging.file.path}
+    era undefined la momentul initializarii (LOG_PATH_IS_UNDEFINED).
+    Ref: https://docs.spring.io/spring-boot/docs/current/reference/html/features.html#features.logging.logback-extensions
 -->
 <configuration>
+
+    <!-- Citeste proprietatea din Spring Environment dupa ce Spring Boot o proceseaza -->
+    <springProperty scope="context" name="LOG_PATH"
+                    source="logging.file.path"
+                    defaultValue="/app/logs"/>
 
     <!-- Pattern partajat intre console (dev) si fisier (prod) -->
     <property name="LOG_PATTERN"
@@ -36,7 +34,6 @@
     <springProfile name="dev">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
-                <!-- %highlight coloreaza nivelul cu ANSI: INFO=alb, WARN=galben, ERROR=rosu -->
                 <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) [req:%X{requestId:-?}] [%X{userEmail:-anon}] %logger{30} - %msg%n</pattern>
             </encoder>
         </appender>
@@ -45,7 +42,6 @@
             <appender-ref ref="CONSOLE"/>
         </root>
 
-        <!-- Reducem zgomotul framework-urilor in dev -->
         <logger name="org.springframework"          level="WARN"/>
         <logger name="org.hibernate"                level="WARN"/>
         <logger name="com.zaxxer.hikari"            level="WARN"/>
@@ -58,9 +54,9 @@
 
         <!-- app.log: toate evenimentele INFO+ -->
         <appender name="FILE_ALL" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>${logging.file.path}/app.log</file>
+            <file>${LOG_PATH}/app.log</file>
             <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>${logging.file.path}/app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <fileNamePattern>${LOG_PATH}/app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
                 <maxHistory>30</maxHistory>
                 <totalSizeCap>1GB</totalSizeCap>
             </rollingPolicy>
@@ -70,15 +66,14 @@
             </encoder>
         </appender>
 
-        <!-- error.log: DOAR WARN si ERROR, pentru monitorizare alertare rapida -->
+        <!-- error.log: DOAR WARN si ERROR -->
         <appender name="FILE_ERROR" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>${logging.file.path}/error.log</file>
-            <!-- Ignora INFO, accepta doar WARN si ERROR -->
+            <file>${LOG_PATH}/error.log</file>
             <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
                 <level>WARN</level>
             </filter>
             <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>${logging.file.path}/error.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <fileNamePattern>${LOG_PATH}/error.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
                 <maxHistory>90</maxHistory>
                 <totalSizeCap>500MB</totalSizeCap>
             </rollingPolicy>
