@@ -161,7 +161,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String sanitizeLog(String value) {
-        return value == null ? "" : value.replaceAll("[\r\n]", "_");
+        if (value == null) return "";
+        return value.replaceAll("[^a-zA-Z0-9.:\\-_/]", "_")
+                .substring(0, Math.min(value.length(), 100));
     }
 
     private void sendRateLimitResponse(HttpServletResponse response,
