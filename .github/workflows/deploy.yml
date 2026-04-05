@@ -36,8 +36,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash << 'EOF'
             cd /opt/proiectcrm
-            docker rm $(docker ps -aq --filter name=crm_backend) 2>/dev/null || true
             docker-compose --env-file .env.production up --build -d backend
             sleep 10
-            docker-compose ps backend
+            docker-compose --env-file .env.production ps backend
           EOF
