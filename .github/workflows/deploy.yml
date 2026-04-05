@@ -22,12 +22,13 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
 
       - name: Copiază sursele pe server
+        continue-on-error: true
         run: |
           rsync -avz --delete \
             --exclude='.git' \
             --exclude='.github' \
-            --ignore-errors \
             --exclude='.idea' \
+            --ignore-errors \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/proiectcrm/CRM_Backend/
@@ -36,7 +37,10 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash << 'EOF'
             cd /opt/proiectcrm
+            export APP_VERSION=1.${{ github.run_number }}
+            echo "Deploy versiunea: crm-backend:$APP_VERSION"
             docker-compose --env-file .env.production up --build -d backend
+            docker image prune -f
             sleep 10
             docker-compose --env-file .env.production ps backend
           EOF
