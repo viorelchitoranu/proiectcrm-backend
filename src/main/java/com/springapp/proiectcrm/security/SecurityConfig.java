@@ -64,7 +64,8 @@ public class SecurityConfig {
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
                         // /api/internal nu are sesiune Spring — ignorăm CSRF
-                        .ignoringRequestMatchers("/api/auth/**", "/ws/**", "/actuator/**", "/api/internal/**")
+                        .ignoringRequestMatchers("/api/auth/**", "/ws/**", "/actuator/**",
+                                "/api/internal/**", "/api/files/**")
                 )
                 .cors(Customizer.withDefaults())
                 .securityContext(sc -> sc.securityContextRepository(securityContextRepository))
